@@ -16,7 +16,7 @@
       var base = p.slice(0, p.lastIndexOf('/') + 1);
       if (!/^[A-Za-z0-9_.~%\/-]+$/.test(base)) base = '/';
       window.PLAYNET_BASE = base;
-      window.PLAYNET_ASSET_VERSION = '1.1.0';
+      window.PLAYNET_ASSET_VERSION = '1.2.0';
       document.write('<base href="' + base + '"><link rel="stylesheet" href="' + base + 'css/playnet.css?v=' + window.PLAYNET_ASSET_VERSION + '">');
     })();
   </script>
@@ -107,6 +107,7 @@
                 <h2>참가자 <small id="playerCount"></small></h2>
               </div>
               <ul id="lobbyPlayers" class="lobby-players"></ul>
+              <div id="botPanel" class="bot-panel"></div>
               <p class="hint">위쪽 방 코드를 누르면 초대 링크가 복사돼요.</p>
             </div>
             <div class="card">

@@ -3,8 +3,8 @@
 (() => {
   'use strict';
 
-  const PROTOCOL = 1; // server/core/version.js 의 PROTOCOL 과 같아야 함
-  const VERSION = '1.1.0';
+  const PROTOCOL = 2; // server/core/version.js 의 PROTOCOL 과 같아야 함
+  const VERSION = '1.2.0';
   const BASE = window.PLAYNET_BASE || '/';
   const CFG = window.PLAYNET_CONFIG || {};
 
@@ -82,8 +82,10 @@
   // ───────────────── 공용 UI (게임 모듈에서 사용)
   const ui = {
     avatar(p, size) {
-      const a = el('span', 'avatar', (p?.name || '?')[0]);
+      const bot = !!(p && p.bot);
+      const a = el('span', 'avatar' + (bot ? ' bot' : ''), (bot ? p.name.replace(/^AI\s*/, '') : p?.name || '?')[0] || '?');
       a.style.background = colorFor(p?.id);
+      if (bot) a.title = 'AI 플레이어';
       if (size) {
         a.style.width = a.style.height = size + 'px';
         a.style.fontSize = Math.round(size * 0.44) + 'px';
@@ -121,9 +123,10 @@
         let meta = it.meta ?? '';
         if (!meta) {
           if (it.id === state.me.id) meta = '나';
+          else if (p.bot) meta = 'AI';
           if (p.left) meta = '나감';
           else if (p.connected === false) meta = '연결 끊김';
-          else if (it.dead) meta = '사망';
+          else if (it.dead) meta = p.bot ? '사망 · AI' : '사망';
         }
         c.append(el('div', 'pmeta', meta));
         if (it.tag) c.append(el('span', 'ptag' + (it.tag.tone ? ' ' + it.tag.tone : ''), it.tag.text));
@@ -512,20 +515,23 @@
     const ul = $('lobbyPlayers');
     ul.innerHTML = '';
     s.players.forEach((p) => {
-      const li = el('li', p.connected ? '' : 'off');
+      const li = el('li', (p.connected ? '' : 'off') + (p.bot ? ' bot' : ''));
       li.append(ui.avatar(p), el('span', 'name', p.name));
       if (p.id === s.hostId) li.append(el('span', 'tag host', '방장'));
       if (p.id === s.me.id) li.append(el('span', 'tag me', '나'));
+      if (p.bot) li.append(el('span', 'tag ai', 'AI'));
       if (!p.connected) li.append(el('span', 'tag', '연결 끊김'));
-      if (isHost && p.id !== s.me.id) {
+      if (isHost && p.id !== s.me.id && !p.bot) {
         const k = el('button', 'btn ghost small kick', '내보내기');
         k.onclick = () => emit('kick', { playerId: p.id });
         li.append(k);
       }
       ul.append(li);
     });
-    $('playerCount').textContent = `${s.players.length} / ${s.game.maxPlayers}`;
+    const bots = s.lobby.bots;
+    $('playerCount').textContent = `${s.players.length} / ${s.game.maxPlayers}${bots && bots.count ? ` (AI ${bots.count})` : ''}`;
     $('settingsLock').classList.toggle('hidden', isHost);
+    renderBotPanel(isHost);
 
     // 게임 고르기
     const picker = $('gamePicker');
@@ -554,11 +560,58 @@
     const btn = $('startBtn');
     btn.classList.toggle('hidden', !isHost);
     btn.disabled = !!s.lobby.startError;
+    const short = s.lobby.startError && bots && !bots.enabled && s.players.length < s.game.minPlayers;
     $('startHint').textContent = s.lobby.startError
-      ? s.lobby.startError
+      ? s.lobby.startError + (short && isHost ? ' · 🤖 AI로 채우기를 켜면 바로 시작할 수 있어요.' : '')
       : isHost
       ? '모두 모였다면 시작하세요.'
       : '방장이 게임을 시작하기를 기다리는 중…';
+  }
+
+  /** 부족한 인원을 AI 로 채우기 (방장만 변경) */
+  function renderBotPanel(isHost) {
+    const s = state;
+    const b = s.lobby.bots;
+    const panel = $('botPanel');
+    panel.innerHTML = '';
+    if (!b) return;
+    const head = el('div', 'bot-head');
+    const sw = el('label', 'switch');
+    const cb = el('input');
+    cb.type = 'checkbox';
+    cb.checked = b.enabled;
+    cb.disabled = !isHost;
+    cb.onchange = () => emit('setBots', { enabled: cb.checked });
+    sw.append(cb, el('span', null, '🤖 부족한 인원 AI로 채우기'));
+    head.append(sw);
+    panel.append(head);
+    if (b.enabled) {
+      const row = el('div', 'bot-row');
+      row.append(el('span', 'bot-label', '총 인원'));
+      const st = el('span', 'stepper');
+      const lo = s.game.minPlayers;
+      const hi = s.game.maxPlayers;
+      if (isHost) {
+        const minus = el('button', 'btn', '−');
+        const plus = el('button', 'btn', '+');
+        minus.disabled = b.target <= lo;
+        plus.disabled = b.target >= hi;
+        minus.onclick = () => emit('setBots', { target: b.target - 1 });
+        plus.onclick = () => emit('setBots', { target: b.target + 1 });
+        st.append(minus, el('b', null, b.target), plus);
+      } else st.append(el('b', null, b.target));
+      row.append(st, el('span', 'muted small', `사람 ${b.humans} · AI ${b.count}`));
+      panel.append(row);
+    }
+    panel.append(
+      el(
+        'p',
+        'set-note',
+        b.enabled
+          ? 'AI는 사람과 같은 정보만 보고 스스로 판단해요. 사람이 들어오면 AI가 자리를 비켜 줘요.'
+          : `혼자이거나 인원이 부족해도 AI와 함께 바로 시작할 수 있어요. (${s.game.name} ${s.game.minPlayers}~${s.game.maxPlayers}명)`
+      )
+    );
   }
 
   // ───────────────── 채팅

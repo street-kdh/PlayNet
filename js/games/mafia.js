@@ -130,7 +130,7 @@
       }
     } else if (play.stage === 'discussion') {
       title = '토론 시간';
-      sub = '밤사이 일어난 일을 바탕으로 마피아를 찾아내세요.';
+      sub = '밤사이 일어난 일을 바탕으로 마피아를 찾아내세요. 모두 "투표로 넘어가기"를 누르면 바로 투표합니다.';
     } else if (play.stage === 'vote') {
       title = '처형할 사람을 지목하세요';
       sub = a && a.selected
@@ -175,6 +175,15 @@
     // 하단 버튼
     const buttons = [];
     if (a && a.type === 'discussion') {
+      if (play.readyTotal != null) {
+        const cnt = `${play.readyCount}/${play.readyTotal}`;
+        buttons.push({
+          label: a.ready ? `✓ 준비 완료 (${cnt})` : `투표로 넘어가기 (${cnt})`,
+          cls: a.ready ? 'selected' : 'primary',
+          disabled: a.ready,
+          onClick: () => c.act('ready'),
+        });
+      }
       buttons.push({ label: '⏱ 시간 +15초', onClick: () => c.act('adjustTime', { dir: 1 }), disabled: a.usedTimeAdjust });
       buttons.push({ label: '⏱ 시간 −15초', onClick: () => c.act('adjustTime', { dir: -1 }), disabled: a.usedTimeAdjust });
     } else if (a && a.type === 'vote') {

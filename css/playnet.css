@@ -186,6 +186,13 @@ input:disabled, select:disabled { opacity: .55; }
 .tag { font-size: 11px; padding: 2px 7px; border-radius: 6px; border: 1px solid var(--line-strong); color: var(--muted); white-space: nowrap; }
 .tag.host { color: var(--gold); border-color: var(--gold); }
 .tag.me { color: var(--text); }
+.tag.ai { color: #9fb4c7; border-color: rgba(159, 180, 199, .45); }
+.lobby-players li.bot { background: rgba(159, 180, 199, .06); }
+.avatar.bot::before { content: '🤖'; position: absolute; right: -5px; bottom: -5px; font-size: 11px; line-height: 1; font-family: var(--sans); filter: drop-shadow(0 1px 1px rgba(0,0,0,.6)); }
+.pcard .avatar.bot::before { font-size: 17px; right: -6px; bottom: -4px; }
+.bot-panel { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.bot-panel .bot-row { display: flex; align-items: center; gap: 12px; margin-top: 10px; padding: 8px 10px; border-radius: 10px; background: var(--panel-2); }
+.bot-panel .bot-label { font-size: 14px; }
 
 .game-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-bottom: 18px; }
 .gp-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
