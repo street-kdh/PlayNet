@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <script>
+    // 하위 경로(/PlayNet, /playnet)에서 열려도 파일을 올바른 위치에서 불러오도록 기준 경로를 정한다.
+    // 모든 파일을 절대 경로로 불러오므로, 주소 끝에 / 가 없어도 같은 주소의 다른 서비스로 잘못된 요청이 가지 않는다.
+    (function () {
+      var p = location.pathname;
+      var last = p.slice(p.lastIndexOf('/') + 1);
+      if (last && last.indexOf('.') < 0) {
+        p += '/';
+        history.replaceState(null, '', p + location.search + location.hash);
+      }
+      var base = p.slice(0, p.lastIndexOf('/') + 1);
+      if (!/^[A-Za-z0-9_.~%\/-]+$/.test(base)) base = '/';
+      window.PLAYNET_BASE = base;
+      window.PLAYNET_ASSET_VERSION = '1.0.0';
+      document.write('<base href="' + base + '"><link rel="stylesheet" href="' + base + 'css/playnet.css?v=1.0.0">');
+    })();
+  </script>
+  <title>PlayNet · 친구들과 보드게임</title>
+  <meta name="description" content="설치도 가입도 없이, 링크 하나로 친구들과 즐기는 보드게임 — 마피아, 라이어 게임" />
+  <meta name="theme-color" content="#0c0c10" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=Noto+Serif+KR:wght@600;900&display=swap" rel="stylesheet" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎲</text></svg>" />
+</head>
+<body class="screen-home">
+  <div class="grain" aria-hidden="true"></div>
+
+  <!-- ───────── 첫 화면 ───────── -->
+  <section id="home" class="screen">
+    <header class="home-top">
+      <div class="brand"><span class="brand-mark">🎲</span><span>Play<b>Net</b></span></div>
+      <span id="connPill" class="conn-pill connecting"><i></i><span>서버 연결 중…</span></span>
+    </header>
+
+    <div class="home-hero">
+      <p class="eyebrow">Board games with friends</p>
+      <h1 class="hero-title">오늘 밤,<br />누구와 한 판?</h1>
+      <p class="hero-sub">설치도 가입도 없이, 링크 하나로 친구들과 보드게임을.</p>
+    </div>
+
+    <div id="offlineNote" class="offline-note hidden">
+      <b>게임 서버에 연결할 수 없어요.</b>
+      <span>서버를 운영하는 PC가 꺼져 있거나 잠시 점검 중일 수 있어요. 자동으로 다시 연결을 시도합니다.</span>
+    </div>
+    <div id="versionNote" class="offline-note hidden">
+      <b>화면과 서버의 버전이 달라요.</b>
+      <span>새로고침(Ctrl+Shift+R)해 주세요. 계속되면 서버를 최신으로 업데이트해야 합니다.</span>
+    </div>
+
+    <div class="home-grid">
+      <div class="card entry">
+        <label class="field">
+          <span>닉네임</span>
+          <input id="nameInput" maxlength="12" placeholder="최대 12자" autocomplete="nickname" />
+        </label>
+        <div class="divider"><span>초대 코드가 있다면</span></div>
+        <div class="join-row">
+          <input id="codeInput" maxlength="4" placeholder="ABCD" autocomplete="off" spellcheck="false" aria-label="초대 코드" />
+          <button id="joinBtn" class="btn">참가</button>
+        </div>
+        <p id="joinPeek" class="hint peek"></p>
+      </div>
+
+      <div class="games">
+        <h2 class="section-title">게임 고르고 방 만들기</h2>
+        <div id="gameList" class="game-list"></div>
+      </div>
+    </div>
+
+    <footer class="home-foot">PlayNet <span id="clientVersion"></span> · 방 코드를 공유하면 친구가 바로 들어올 수 있어요</footer>
+  </section>
+
+  <!-- ───────── 방 (대기실 + 게임) ───────── -->
+  <section id="app" class="screen hidden">
+    <header class="topbar">
+      <button id="codeChip" class="chip code" title="초대 링크 복사">
+        <span class="chip-label">ROOM</span><b id="roomCode">----</b><span class="copy-ico">⧉</span>
+      </button>
+      <div class="phase-box">
+        <span id="phaseIcon" class="phase-icon">🎲</span>
+        <div>
+          <div id="phaseLabel" class="phase-label">대기실</div>
+          <div id="phaseSub" class="phase-sub"></div>
+        </div>
+      </div>
+      <div id="timer" class="timer hidden"><span id="timerText">0:00</span><i id="timerBar"></i></div>
+      <div class="top-right">
+        <button id="roleChip" class="chip role hidden" title="내 카드 다시 보기"></button>
+        <button id="leaveBtn" class="btn ghost small">나가기</button>
+      </div>
+    </header>
+    <div id="connBanner" class="conn-banner hidden">서버와 연결이 끊겼어요. 다시 연결하는 중…</div>
+
+    <main class="layout">
+      <section class="stage">
+        <!-- 대기실 -->
+        <div id="lobbyView" class="hidden">
+          <div class="lobby-grid">
+            <div class="card">
+              <div class="card-head">
+                <h2>참가자 <small id="playerCount"></small></h2>
+              </div>
+              <ul id="lobbyPlayers" class="lobby-players"></ul>
+              <p class="hint">위쪽 방 코드를 누르면 초대 링크가 복사돼요.</p>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <h2>게임 설정</h2>
+                <span id="settingsLock" class="muted small">방장만 변경 가능</span>
+              </div>
+              <div id="gamePicker" class="game-picker"></div>
+              <div id="settingsPanel" class="settings"></div>
+            </div>
+          </div>
+          <div class="start-row">
+            <p id="startHint" class="hint"></p>
+            <button id="startBtn" class="btn primary big">게임 시작</button>
+          </div>
+        </div>
+
+        <!-- 게임 -->
+        <div id="gameView" class="hidden"><div id="gameRoot"></div></div>
+      </section>
+
+      <aside class="chat">
+        <div class="chat-head">
+          <h3>대화</h3>
+          <span id="channelTag" class="channel-tag"></span>
+        </div>
+        <div id="messages" class="messages" aria-live="polite"></div>
+        <form id="chatForm" class="chat-form">
+          <input id="chatInput" maxlength="300" autocomplete="off" placeholder="메시지 입력" />
+          <button class="btn primary" type="submit">전송</button>
+        </form>
+      </aside>
+    </main>
+  </section>
+
+  <!-- 단계 전환 연출 -->
+  <div id="phaseOverlay" class="phase-overlay hidden">
+    <div class="po-inner">
+      <div id="poIcon" class="po-icon"></div>
+      <div id="poTitle" class="po-title"></div>
+      <div id="poSub" class="po-sub"></div>
+    </div>
+  </div>
+
+  <!-- 카드 공개 (직업·제시어) -->
+  <div id="cardModal" class="modal hidden">
+    <div class="reveal-card">
+      <div class="rc-inner">
+        <div class="rc-back">?</div>
+        <div class="rc-front">
+          <p id="rcEyebrow" class="rc-eyebrow"></p>
+          <div id="rcIcon" class="rc-icon"></div>
+          <h2 id="rcTitle" class="rc-title"></h2>
+          <p id="rcBadge" class="rc-badge"></p>
+          <p id="rcDesc" class="rc-desc"></p>
+          <p id="rcExtra" class="rc-extra"></p>
+          <button id="rcClose" class="btn block">확인</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 결과 -->
+  <div id="resultModal" class="modal hidden">
+    <div class="card result">
+      <p class="eyebrow">Game over</p>
+      <h2 id="resultTitle"></h2>
+      <p id="resultSub" class="muted"></p>
+      <div id="resultExtra" class="result-extra"></div>
+      <ul id="resultList" class="result-list"></ul>
+      <div class="result-actions">
+        <button id="resultClose" class="btn ghost">대화 기록 보기</button>
+        <button id="lobbyBtn" class="btn primary">대기실로</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    (function () {
+      var b = window.PLAYNET_BASE, v = window.PLAYNET_ASSET_VERSION;
+      ['config.js', 'vendor/socket.io.min.js', 'js/core.js', 'js/games/mafia.js', 'js/games/liar.js'].forEach(function (f) {
+        document.write('<script src="' + b + f + '?v=' + v + '"><\/script>');
+      });
+    })();
+  </script>
+</body>
+</html>
