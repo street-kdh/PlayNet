@@ -16,8 +16,8 @@
       var base = p.slice(0, p.lastIndexOf('/') + 1);
       if (!/^[A-Za-z0-9_.~%\/-]+$/.test(base)) base = '/';
       window.PLAYNET_BASE = base;
-      window.PLAYNET_ASSET_VERSION = '1.0.0';
-      document.write('<base href="' + base + '"><link rel="stylesheet" href="' + base + 'css/playnet.css?v=1.0.0">');
+      window.PLAYNET_ASSET_VERSION = '1.1.0';
+      document.write('<base href="' + base + '"><link rel="stylesheet" href="' + base + 'css/playnet.css?v=' + window.PLAYNET_ASSET_VERSION + '">');
     })();
   </script>
   <title>PlayNet · 친구들과 보드게임</title>
