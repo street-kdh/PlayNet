@@ -4,7 +4,7 @@
   'use strict';
 
   const PROTOCOL = 2; // server/core/version.js 의 PROTOCOL 과 같아야 함
-  const VERSION = '1.2.0';
+  const VERSION = '1.2.1';
   const BASE = window.PLAYNET_BASE || '/';
   const CFG = window.PLAYNET_CONFIG || {};
 

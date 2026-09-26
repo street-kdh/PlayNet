@@ -116,14 +116,15 @@
         if (a.locked) sub = '결과는 대화창에서 확인하세요.';
         else if (a.action === 'kill') {
           tone = 'alert';
-          sub = a.selected
-            ? `현재 목표: ${c.nameOf(a.selected)} · ${a.pickedBy}님이 움직입니다 (마지막으로 지목한 마피아) · 동료와 대화창에서 상의하세요`
-            : '동료 마피아 중 마지막으로 고른 사람이 대상이 되고, 그 마피아가 움직인 것으로 처리됩니다.';
+          if (!a.selected) sub = '동료 마피아 중 마지막으로 고른 사람이 대상이 되고, 그 마피아가 움직인 것으로 처리됩니다.';
+          else if (a.done === false)
+            sub = `동료가 ${c.nameOf(a.selected)}님을 골랐어요 · 같은 사람을 누르면 동의, 다른 사람을 누르면 변경 · 마피아가 모두 골라야 밤이 끝납니다`;
+          else sub = `현재 목표: ${c.nameOf(a.selected)} · ${a.pickedBy}님이 움직입니다 (마지막으로 지목한 마피아) · 모두 고르면 바로 아침이 됩니다`;
         } else if (a.action === 'track') {
           sub = a.selected
-            ? `미행 대상: ${c.nameOf(a.selected)} · 결과는 아침에 대화창으로 알려드려요 (밤이 끝나기 전까지 변경 가능)`
+            ? `미행 대상: ${c.nameOf(a.selected)} · 결과는 아침에 대화창으로 알려드려요 · 모두 고르면 바로 아침이 됩니다`
             : '카드를 눌러 미행할 사람을 고르세요. 그 사람이 누구에게 움직였는지 아침에 알려드려요.';
-        } else sub = a.selected ? `선택: ${c.nameOf(a.selected)} · 밤이 끝나기 전까지 바꿀 수 있습니다` : '카드를 눌러 선택하세요.';
+        } else sub = a.selected ? `선택: ${c.nameOf(a.selected)} · 모두 고르면 바로 아침이 됩니다 (그 전까지 바꿀 수 있어요)` : '카드를 눌러 선택하세요.';
       } else {
         title = '밤이 깊었습니다';
         sub = '아침이 오기를 기다리세요…';
@@ -134,18 +135,16 @@
     } else if (play.stage === 'vote') {
       title = '처형할 사람을 지목하세요';
       sub = a && a.selected
-        ? a.selected === 'skip'
-          ? '기권했습니다 · 바꿀 수 있습니다'
-          : `${c.nameOf(a.selected)}님에게 투표했습니다 · 바꿀 수 있습니다`
-        : '최다 득표자가 최후의 변론을 합니다. 동률이면 아무도 지목되지 않습니다.';
+        ? (a.selected === 'skip' ? '기권했습니다' : `${c.nameOf(a.selected)}님에게 투표했습니다`) + ' · 모두 투표하면 바로 결과가 나옵니다 (그 전까지 바꿀 수 있어요)'
+        : '최다 득표자가 최후의 변론을 합니다. 동률이면 아무도 지목되지 않습니다. 모두 투표하면 바로 결과가 나옵니다.';
     } else if (play.stage === 'defense') {
       tone = 'alert';
       title = a && a.type === 'accused' ? '당신의 최후의 변론 시간입니다' : `${accused?.name}님의 최후의 변론`;
-      sub = a && a.type === 'accused' ? '대화창에서 결백을 주장하세요. 다른 사람은 말할 수 없습니다.' : '변론을 들어보세요.';
+      sub = a && a.type === 'accused' ? '대화창에서 결백을 주장하세요. 다 말했으면 "변론 마치기"를 누르세요.' : '변론을 들어보세요. 변론이 끝나면 바로 찬반 투표입니다.';
     } else if (play.stage === 'final') {
       tone = 'alert';
       title = a && a.type === 'accused' ? '당신의 운명이 결정되고 있습니다' : `${accused?.name}님을 처형할까요?`;
-      sub = `${play.finalCount}명 투표 완료 · 찬성이 반대보다 많으면 처형됩니다`;
+      sub = `${play.finalCount}명 투표 완료 · 찬성이 반대보다 많으면 처형됩니다 · 모두 투표하면 바로 결과가 나옵니다`;
     } else if (play.stage === 'verdict') {
       title = '판결이 내려졌습니다';
       sub = '곧 밤이 찾아옵니다.';
@@ -189,6 +188,8 @@
     } else if (a && a.type === 'vote') {
       const sk = play.voteTally && play.voteTally.skip;
       buttons.push({ label: `기권${sk ? ` (${sk})` : ''}`, cls: a.selected === 'skip' ? 'selected' : '', onClick: () => c.act('vote', { targetId: 'skip' }) });
+    } else if (a && a.type === 'accused' && a.canEnd && play.stage === 'defense') {
+      buttons.push({ label: '변론 마치기', cls: 'primary', onClick: () => c.act('endDefense') });
     } else if (a && a.type === 'final') {
       buttons.push({ label: '👍 찬성 (처형)', cls: 'yes' + (a.selected === 'yes' ? ' selected' : ''), onClick: () => c.act('final', { choice: 'yes' }) });
       buttons.push({ label: '👎 반대 (살림)', cls: 'no' + (a.selected === 'no' ? ' selected' : ''), onClick: () => c.act('final', { choice: 'no' }) });

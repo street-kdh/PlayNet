@@ -199,7 +199,9 @@
       ui.banner(
         root,
         '라이어를 지목하세요',
-        play.myVote ? `${c.nameOf(play.myVote)}님을 지목했습니다 · 바꿀 수 있습니다` : '가장 많은 표를 받은 사람이 지목됩니다. 동률이면 라이어의 승리!',
+        play.myVote
+          ? `${c.nameOf(play.myVote)}님을 지목했습니다 · 모두 지목하면 바로 결과가 나옵니다 (그 전까지 바꿀 수 있어요)`
+          : '가장 많은 표를 받은 사람이 지목됩니다. 동률이면 라이어의 승리! 모두 지목하면 바로 결과가 나옵니다.',
         'accent'
       );
       const items = play.order.filter((id) => c.player(id) && !c.player(id).left).map((id) => ({ id, badge: play.voteTally && play.voteTally[id] }));
