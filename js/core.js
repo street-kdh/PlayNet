@@ -4,7 +4,7 @@
   'use strict';
 
   const PROTOCOL = 2; // server/core/version.js 의 PROTOCOL 과 같아야 함
-  const VERSION = '1.2.2';
+  const VERSION = '1.3.0';
   const BASE = window.PLAYNET_BASE || '/';
   const CFG = window.PLAYNET_CONFIG || {};
 
@@ -213,6 +213,8 @@
       toast,
       ui,
       act: (type, payload) => emit('gameAction', { type, ...(payload || {}) }),
+      /** 대화창으로 보내기 (퀴즈처럼 대화로 답하는 게임) */
+      say: (text) => emit('chat', { text }),
       update: (settings) => emit('updateSettings', { settings }),
     };
   }
@@ -559,7 +561,11 @@
 
     // 게임별 설정 (입력 중이면 다시 그리지 않음)
     const panel = $('settingsPanel');
-    if (!panel.contains(document.activeElement) || panel.dataset.game !== s.gameId) {
+    // 글자·숫자를 입력하는 중일 때만 다시 그리지 않는다 (버튼·체크박스를 누른 뒤에는 바로 반영)
+    const ae = document.activeElement;
+    const editing =
+      ae && panel.contains(ae) && (ae.tagName === 'SELECT' || ae.tagName === 'TEXTAREA' || (ae.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit'].includes(ae.type)));
+    if (!editing || panel.dataset.game !== s.gameId) {
       panel.innerHTML = '';
       panel.dataset.game = s.gameId;
       if (mod && mod.renderSettings) mod.renderSettings(panel, ctx());
@@ -628,7 +634,11 @@
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
     let d;
     const mine = state && m.from === state.me.id;
-    if (m.channel === 'system') {
+    if (m.channel === 'system' && m.kind === 'host') {
+      // 게임 사회자(AI MC)의 멘트
+      d = el('div', 'msg host');
+      d.append(el('span', 'who', m.name || '사회자'), document.createTextNode(m.text));
+    } else if (m.channel === 'system') {
       d = el('div', `msg system ${m.kind || ''}${m.to ? ' private' : ''}`, m.text);
     } else if (!m.name) {
       d = el('div', `msg ${m.channel} note`, m.text);

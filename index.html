@@ -16,12 +16,12 @@
       var base = p.slice(0, p.lastIndexOf('/') + 1);
       if (!/^[A-Za-z0-9_.~%\/-]+$/.test(base)) base = '/';
       window.PLAYNET_BASE = base;
-      window.PLAYNET_ASSET_VERSION = '1.2.2';
+      window.PLAYNET_ASSET_VERSION = '1.3.0';
       document.write('<base href="' + base + '"><link rel="stylesheet" href="' + base + 'css/playnet.css?v=' + window.PLAYNET_ASSET_VERSION + '">');
     })();
   </script>
   <title>PlayNet · 친구들과 보드게임</title>
-  <meta name="description" content="설치도 가입도 없이, 링크 하나로 친구들과 즐기는 보드게임 — 마피아, 라이어 게임" />
+  <meta name="description" content="설치도 가입도 없이, 링크 하나로 친구들과 즐기는 보드게임 — 마피아, 라이어 게임, 예능 퀴즈쇼" />
   <meta name="theme-color" content="#0c0c10" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -190,7 +190,7 @@
   <script>
     (function () {
       var b = window.PLAYNET_BASE, v = window.PLAYNET_ASSET_VERSION;
-      ['config.js', 'vendor/socket.io.min.js', 'js/core.js', 'js/games/mafia.js', 'js/games/liar.js'].forEach(function (f) {
+      ['config.js', 'vendor/socket.io.min.js', 'js/core.js', 'js/games/mafia.js', 'js/games/liar.js', 'js/games/quiz.js'].forEach(function (f) {
         document.write('<script src="' + b + f + '?v=' + v + '"><\/script>');
       });
     })();
