@@ -4,7 +4,7 @@
   'use strict';
 
   const PROTOCOL = 2; // server/core/version.js 의 PROTOCOL 과 같아야 함
-  const VERSION = '1.3.0';
+  const VERSION = '1.3.1';
   const BASE = window.PLAYNET_BASE || '/';
   const CFG = window.PLAYNET_CONFIG || {};
 
@@ -260,7 +260,18 @@
       $('messages').innerHTML = '';
       msgs.forEach(addMessage);
     });
-    socket.on('chat', addMessage);
+    socket.on('chat', (m) => {
+      addMessage(m);
+      // 게임 화면이 새 메시지에 반응할 수 있게 (예: 퀴즈 음성 모드의 통과/실패 소리)
+      const mod = state && moduleFor(state.gameId);
+      if (mod && mod.onChat) {
+        try {
+          mod.onChat(ctx(), m);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+    });
     socket.on('kicked', ({ message }) => {
       clearSession();
       showHome();
@@ -643,7 +654,7 @@
     } else if (!m.name) {
       d = el('div', `msg ${m.channel} note`, m.text);
     } else {
-      d = el('div', `msg ${m.channel}${m.kind ? ' ' + m.kind : ''}${mine ? ' mine' : ''}`);
+      d = el('div', `msg ${m.channel}${m.kind ? ' ' + m.kind : ''}${m.voice ? ' voice' : ''}${mine ? ' mine' : ''}`);
       const who = el('span', 'who', m.name);
       if (m.channel === 'public' && !mine) who.style.color = colorFor(m.from);
       d.append(who, document.createTextNode(m.text));

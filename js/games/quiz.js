@@ -23,6 +23,474 @@
     return box;
   }
 
+
+  // ───────────────── 음성 모드 (이 기기만)
+  //  릴레이에서 내 차례가 되면: 띠링 → 이 기기가 문제 앞부분을 읽어 줌("훈민") → 듣기 → 말한 답을 서버가 판정
+  //  → 딩동댕(정답) · 삐빅(틀림 — 시간이 남으면 다시 듣기) · 땡(차례 실패). 다른 사람 차례에는 조용히 있다.
+  //  빨리 맞히기·스틸에서는 답 입력칸의 🎤 를 눌러 말로 답할 수 있다.
+  //  브라우저의 음성 합성(speechSynthesis)·음성 인식(SpeechRecognition — 크롬·엣지·사파리)을 쓴다.
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+  const HAS_TTS = 'speechSynthesis' in window && typeof window.SpeechSynthesisUtterance === 'function';
+  const PASS_WORD = /^(패스|몰라|몰라요|모르겠어|모르겠어요|모르겠다|모름)$/;
+  const V = {
+    on: readPref(),
+    unlocked: false, // 이 페이지에서 한 번 눌러 소리를 켰는지 (브라우저 자동 재생 제한)
+    actx: null,
+    rec: null,
+    c: null, // 가장 최근 화면 정보
+    turnKey: null, // 음성으로 시작한 내 차례
+    revealKey: null,
+    failKey: null,
+    mode: 'idle', // idle | reading | listening | checking | wrong | done | tap
+    heard: '',
+    note: '',
+    retries: 0,
+    typed: null, // 입력칸으로 보낸 답 — 틀렸을 때 삐빅
+  };
+  function readPref() {
+    try {
+      return localStorage.getItem('playnet.quiz.voice') === '1';
+    } catch {
+      return false;
+    }
+  }
+  function savePref(on) {
+    try {
+      localStorage.setItem('playnet.quiz.voice', on ? '1' : '0');
+    } catch {
+      /* 저장 안 돼도 이번 접속 동안은 유지 */
+    }
+  }
+  const debug = (key, v) => {
+    if (window.PLAYNET_DEBUG) (window.PlayNet['_' + key] = window.PlayNet['_' + key] || []).push(v);
+  };
+  const compact = (t) => String(t || '').replace(/[\s.,!?~]/g, '');
+
+  // 효과음 (Web Audio 로 직접 만든 소리)
+  function audio() {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    if (!V.actx) {
+      try {
+        V.actx = new AC();
+      } catch {
+        return null;
+      }
+    }
+    if (V.actx.state === 'suspended') V.actx.resume().catch(() => {});
+    return V.actx;
+  }
+  function tone(freq, at, dur, type = 'sine', vol = 0.2) {
+    const ctx = audio();
+    if (!ctx) return;
+    const t0 = ctx.currentTime + at;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t0);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g);
+    g.connect(ctx.destination);
+    o.start(t0);
+    o.stop(t0 + dur + 0.05);
+  }
+  const SFX = {
+    turn: () => (tone(988, 0, 0.16, 'triangle', 0.18), tone(1319, 0.13, 0.3, 'triangle', 0.18)), // 띠링
+    pass: () => (tone(784, 0, 0.45, 'sine', 0.25), tone(659, 0.2, 0.45, 'sine', 0.25), tone(1047, 0.42, 0.8, 'sine', 0.28)), // 딩동댕
+    wrong: () => (tone(196, 0, 0.12, 'square', 0.07), tone(196, 0.16, 0.14, 'square', 0.07)), // 삐빅
+    fail: () => (tone(311, 0, 0.32, 'sawtooth', 0.09), tone(233, 0.3, 0.7, 'sawtooth', 0.09)), // 땡~
+  };
+  function sfx(name) {
+    if (!V.on) return;
+    debug('sfx', name);
+    try {
+      SFX[name]();
+    } catch {
+      /* 소리를 못 내도 게임은 계속 */
+    }
+  }
+
+  // 읽어 주기 (음성 합성)
+  function koVoice() {
+    try {
+      return window.speechSynthesis.getVoices().find((v) => /^ko/i.test(v.lang || '')) || null;
+    } catch {
+      return null;
+    }
+  }
+  function speak(text, done) {
+    let finished = false;
+    const fin = () => {
+      if (finished) return;
+      finished = true;
+      if (done) done();
+    };
+    if (!V.on || !text) return void setTimeout(fin, 0);
+    debug('tts', text);
+    if (!HAS_TTS) return void setTimeout(fin, 0);
+    try {
+      window.speechSynthesis.cancel();
+      const u = new window.SpeechSynthesisUtterance(text);
+      u.lang = 'ko-KR';
+      u.rate = 0.9;
+      const v = koVoice();
+      if (v) u.voice = v;
+      u.onend = fin;
+      u.onerror = fin;
+      window.speechSynthesis.speak(u);
+    } catch {
+      return void setTimeout(fin, 0);
+    }
+    setTimeout(fin, 1200 + String(text).length * 400); // 끝났다는 알림이 오지 않는 브라우저 대비
+  }
+  function hush() {
+    try {
+      if (HAS_TTS) window.speechSynthesis.cancel();
+    } catch {
+      /* 무시 */
+    }
+  }
+
+  /** 브라우저 자동 재생 제한 풀기 — 사용자가 누를 때 한 번 */
+  function unlock() {
+    if (!V.on || V.unlocked) return;
+    V.unlocked = true;
+    audio();
+    if (HAS_TTS) {
+      try {
+        const u = new window.SpeechSynthesisUtterance(' ');
+        u.volume = 0;
+        window.speechSynthesis.speak(u);
+      } catch {
+        /* 무시 */
+      }
+    }
+  }
+  document.addEventListener('pointerdown', unlock, true);
+  document.addEventListener('keydown', unlock, true);
+
+  // 듣기 (음성 인식)
+  function stopListening() {
+    const r = V.rec;
+    V.rec = null;
+    if (!r) return;
+    r.onresult = r.onerror = r.onend = null;
+    try {
+      r.abort();
+    } catch {
+      /* 무시 */
+    }
+  }
+  /** 한 마디 듣기 — 말이 끝나면 onFinal(후보들), 아무 말도 없으면 onNothing() */
+  function listen(onFinal, onNothing) {
+    if (!SR) return false;
+    stopListening();
+    let rec;
+    try {
+      rec = new SR();
+    } catch {
+      return false;
+    }
+    rec.lang = 'ko-KR';
+    rec.interimResults = true;
+    rec.maxAlternatives = 5;
+    rec.continuous = false;
+    let final = null;
+    let blocked = null;
+    rec.onresult = (e) => {
+      for (let i = e.resultIndex || 0; i < e.results.length; i++) {
+        const r = e.results[i];
+        const alts = [];
+        for (let j = 0; j < r.length; j++) if (r[j] && r[j].transcript) alts.push(String(r[j].transcript).trim());
+        if (r.isFinal) final = alts.filter(Boolean);
+        else if (alts[0]) {
+          V.heard = alts[0];
+          paint();
+        }
+      }
+    };
+    rec.onerror = (e) => {
+      if (e && ['not-allowed', 'service-not-allowed', 'audio-capture'].includes(e.error)) blocked = e.error;
+    };
+    rec.onend = () => {
+      if (V.rec !== rec) return;
+      V.rec = null;
+      if (final && final.length) onFinal(final);
+      else if (blocked) {
+        V.mode = 'tap';
+        V.note = blocked === 'audio-capture' ? '마이크를 찾을 수 없어요.' : '마이크 권한이 필요해요 — 버튼을 눌러 말해 보세요.';
+        paint();
+      } else if (onNothing) onNothing();
+    };
+    V.rec = rec;
+    try {
+      rec.start();
+    } catch {
+      V.rec = null;
+      return false;
+    }
+    debug('listen', Date.now());
+    return true;
+  }
+
+  // 내 차례 흐름
+  const qKey = (play) => `${play.roundIndex}:${play.qIndex}`;
+  function myTurn(play) {
+    return !!(play && play.stage === 'question' && play.round && play.round.mode === 'turn' && play.me && play.me.isTurn);
+  }
+  function stillMyTurn(key) {
+    const play = V.c && V.c.play;
+    return myTurn(play) && qKey(play) === key;
+  }
+  function promptText(q) {
+    if (!q) return '';
+    if (q.kind === 'idiom' || q.kind === 'proverb') return q.front;
+    if (q.kind === 'nonsense') return q.text;
+    return '';
+  }
+  function startTurn(play) {
+    const key = qKey(play);
+    V.turnKey = key;
+    V.mode = 'reading';
+    V.heard = '';
+    V.note = '';
+    V.retries = 0;
+    sfx('turn');
+    setTimeout(() => {
+      if (!stillMyTurn(key)) return;
+      speak(promptText(play.question), () => setTimeout(() => turnListen(key), 250));
+    }, 550);
+  }
+  function turnListen(key) {
+    if (!stillMyTurn(key)) return;
+    if (!SR) {
+      V.mode = 'idle';
+      V.note = '이 브라우저는 음성 인식을 지원하지 않아요 — 입력칸에 답해 주세요.';
+      return paint();
+    }
+    V.mode = 'listening';
+    V.heard = '';
+    if (V.note && !V.note.startsWith('“')) V.note = '';
+    paint();
+    const ok = listen(
+      (alts) => answerByVoice(alts, key),
+      () => {
+        if (stillMyTurn(key) && V.retries++ < 8) turnListen(key);
+        else {
+          V.mode = 'idle';
+          paint();
+        }
+      }
+    );
+    if (!ok) {
+      V.mode = 'tap';
+      V.note = '버튼을 눌러 말해 보세요.';
+      paint();
+    }
+  }
+  /** 입력칸의 🎤 — 빨리 맞히기·스틸에서 한 마디 */
+  function pushToTalk() {
+    const play = V.c && V.c.play;
+    if (myTurn(play)) return turnListen(qKey(play));
+    V.mode = 'listening';
+    V.heard = '';
+    V.note = '';
+    paint();
+    const ok = listen(
+      (alts) => answerByVoice(alts, null),
+      () => {
+        V.mode = 'idle';
+        V.note = '아무 말도 들리지 않았어요.';
+        paint();
+      }
+    );
+    if (!ok) {
+      V.mode = 'idle';
+      V.note = '이 브라우저는 음성 인식을 지원하지 않아요.';
+      paint();
+    }
+  }
+  async function answerByVoice(alts, turnKey) {
+    const c = V.c;
+    if (!c) return;
+    V.heard = alts[0];
+    if (PASS_WORD.test(compact(alts[0])) && turnKey) {
+      V.mode = 'idle';
+      paint();
+      return c.act('pass');
+    }
+    V.mode = 'checking';
+    paint();
+    const res = await c.act('voice', { texts: alts });
+    if (!res || res.ok === false) {
+      V.mode = 'idle';
+      return paint();
+    }
+    V.heard = res.heard;
+    if (res.correct) {
+      V.mode = 'done'; // 딩동댕은 정답 공개 화면에서
+      return paint();
+    }
+    sfx('wrong');
+    V.mode = 'wrong';
+    V.note = `“${res.heard}” — 틀렸어요${turnKey ? ', 다시 말해 보세요' : ''}`;
+    V.heard = '';
+    paint();
+    if (turnKey) setTimeout(() => turnListen(turnKey), 650);
+  }
+
+  /** 화면이 바뀔 때마다 — 내 차례 시작, 통과/실패 소리 */
+  function voiceTick(c) {
+    V.c = c;
+    const play = c.play;
+    if (!V.on || !play) return;
+    const key = qKey(play);
+    if (myTurn(play) && V.turnKey !== key) startTurn(play);
+    if (!(play.stage === 'question' || play.stage === 'steal')) stopListening();
+    // 내 차례가 실패로 끝남 (시간 초과·패스 → 스틸 찬스)
+    if (play.stage === 'steal' && play.turnId === c.me.id && V.turnKey === key && V.failKey !== key) {
+      V.failKey = key;
+      stopListening();
+      hush();
+      sfx('fail');
+      V.mode = 'idle';
+      V.note = '';
+    }
+    if (play.stage === 'reveal' && play.reveal && V.revealKey !== key) {
+      V.revealKey = key;
+      const r = play.reveal;
+      if (r.winnerId === c.me.id) sfx('pass');
+      else if (V.turnKey === key) {
+        if (V.failKey !== key) {
+          V.failKey = key;
+          sfx('fail');
+        }
+        setTimeout(() => speak(`정답은 ${r.answer}`), 900); // 내 차례에 못 맞혔으면 정답을 읽어 준다
+      }
+      V.mode = 'idle';
+      V.heard = '';
+      V.note = '';
+    }
+  }
+
+  function voicePanel(c) {
+    const { el } = c;
+    const mine = myTurn(c.play);
+    const box = el('div', 'qs-voice ' + V.mode);
+    box.id = 'qsVoice';
+    const line = {
+      reading: '🔊 문제를 읽어 주는 중…',
+      listening: '🎙️ 듣고 있어요 — 말해 보세요!',
+      checking: '⏳ 확인 중…',
+      wrong: '❌ 틀렸어요',
+      done: '✅ 정답!',
+      tap: '🎤 버튼을 눌러 말해 주세요',
+    }[V.mode];
+    if (line) box.append(el('div', 'qv-line', line));
+    if (V.heard && V.mode !== 'reading') box.append(el('div', 'qv-heard', `“${V.heard}”`));
+    if (V.note) box.append(el('div', 'qv-note', V.note));
+    const btns = el('div', 'qv-btns');
+    if (mine) {
+      const again = el('button', 'btn small', '🔁 다시 읽어 주기');
+      again.type = 'button';
+      again.onclick = () => {
+        const key = qKey(c.play);
+        stopListening();
+        V.mode = 'reading';
+        paint();
+        speak(promptText(c.play.question), () => setTimeout(() => turnListen(key), 250));
+      };
+      btns.append(again);
+    }
+    if (SR && (V.mode === 'tap' || (mine && V.mode === 'idle'))) {
+      const talk = el('button', 'btn small primary', '🎤 눌러서 말하기');
+      talk.type = 'button';
+      talk.onclick = pushToTalk;
+      btns.append(talk);
+    }
+    if (btns.children.length) box.append(btns);
+    return box;
+  }
+  /** 음성 상태만 다시 그리기 (다음 상태가 오기 전에도) */
+  function paint() {
+    const c = V.c;
+    if (!c || !c.play) return;
+    const old = document.getElementById('qsVoice');
+    const show = V.on && (myTurn(c.play) || V.mode !== 'idle' || V.note) && (c.play.stage === 'question' || c.play.stage === 'steal');
+    if (!show) {
+      if (old) old.remove();
+      return;
+    }
+    const panel = voicePanel(c);
+    if (old) old.replaceWith(panel);
+    else {
+      const card = document.querySelector('.qs-card');
+      if (card) card.append(panel);
+    }
+  }
+
+  async function enableVoice() {
+    V.on = true;
+    savePref(true);
+    V.unlocked = false;
+    unlock();
+    speak('음성 모드를 켰어요');
+    if (SR && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach((t) => t.stop());
+        V.note = '';
+      } catch {
+        V.note = '마이크를 쓸 수 없어요 — 주소창에서 마이크를 허용해 주세요.';
+      }
+    }
+    if (V.c) voiceTick(V.c);
+    paint();
+  }
+  function disableVoice() {
+    stopListening();
+    hush();
+    V.on = false;
+    savePref(false);
+    V.mode = 'idle';
+    V.note = '';
+    V.heard = '';
+    paint();
+  }
+  function voiceSupportNote() {
+    if (SR && HAS_TTS)
+      return '사자성어 릴레이에서 내 차례가 되면 이 기기가 앞 두 글자를 읽어 주고, 말로 답하면 알아듣고 딩동댕·땡 소리를 내요. 빨리 맞히기에서는 🎤를 눌러 말로 답할 수 있어요. 음성 인식은 브라우저(구글·애플)의 서비스를 사용해요.';
+    if (HAS_TTS) return '이 브라우저는 음성 인식을 지원하지 않아 읽어 주기와 소리만 돼요 (말로 답하기는 크롬·엣지·사파리에서 가능).';
+    return '이 브라우저는 음성 기능을 지원하지 않아 효과음만 나요.';
+  }
+  function voicePill(c) {
+    const b = c.el('button', 'qs-voice-pill' + (V.on ? ' on' : ''), V.on ? '🎙️ 음성 켜짐' : '🔈 음성 꺼짐');
+    b.type = 'button';
+    b.title = voiceSupportNote();
+    b.onclick = async () => {
+      if (V.on) disableVoice();
+      else await enableVoice();
+      b.textContent = V.on ? '🎙️ 음성 켜짐' : '🔈 음성 꺼짐';
+      b.classList.toggle('on', V.on);
+    };
+    return b;
+  }
+
+  /** 새 대화 — 입력칸으로 보낸 내 답이 틀렸으면 삐빅 */
+  function onChat(c, m) {
+    if (!V.on || !V.typed || m.from !== c.me.id || m.voice) return;
+    const t = V.typed;
+    if (Date.now() - t.at > 4000) {
+      V.typed = null;
+      return;
+    }
+    if (m.text !== t.text) return;
+    V.typed = null;
+    if (m.kind !== 'correct') sfx('wrong');
+  }
+
   // ───────────────── 대기실 설정
   function renderSettings(panel, c) {
     const { el, isHost, info } = c;
@@ -86,6 +554,18 @@
     sec3.append(row3);
     sec3.append(el('p', 'set-note', LEVEL_NOTE[s.botLevel] || ''));
     panel.append(sec3);
+
+    // 이 기기만 (방장이 아니어도 각자)
+    const sec4 = el('div', 'set-section');
+    sec4.append(el('div', 'set-title', '내 기기'));
+    const sw4 = el('label', 'switch');
+    const cb4 = el('input');
+    cb4.type = 'checkbox';
+    cb4.checked = V.on;
+    cb4.onchange = () => (cb4.checked ? enableVoice() : disableVoice());
+    sw4.append(cb4, el('span', null, '🎙️ 음성 모드 — 내 차례에 문제를 읽어 주고 말로 답하기'));
+    sec4.append(sw4, el('p', 'set-note', voiceSupportNote()));
+    panel.append(sec4);
   }
 
   // ───────────────── 공통 조각
@@ -110,6 +590,7 @@
       if (play.qTotal && ['question', 'steal', 'reveal'].includes(play.stage)) s.append(el('span', 'qs-qn', `문제 ${play.qIndex}/${play.qTotal}`));
       if (r.double) s.append(el('span', 'qs-double', '⭐×2'));
     } else s.append(el('span', 'qs-rnd', `총 ${total}라운드`));
+    s.append(voicePill(c));
     return s;
   }
 
@@ -208,6 +689,13 @@
     send.type = 'submit';
     send.disabled = !canAnswer;
     form.append(input, send);
+    if (V.on && SR && canAnswer) {
+      const mic = el('button', 'btn qs-mic-btn' + (V.mode === 'listening' ? ' on' : ''), '🎤');
+      mic.type = 'button';
+      mic.title = '말로 답하기';
+      mic.onclick = pushToTalk;
+      form.append(mic);
+    }
     if (canPass) {
       const pass = el('button', 'btn' + (play.me && play.me.passed ? ' selected' : ''), play.me && play.me.passed ? '✓ 패스함' : '패스');
       pass.type = 'button';
@@ -220,6 +708,7 @@
       const text = input.value.trim();
       if (!text) return;
       input.value = '';
+      V.typed = { text, at: Date.now() };
       const res = await c.say(text);
       if (res && res.ok === false) input.value = text;
       input.focus();
@@ -232,6 +721,7 @@
     const { el, ui, play } = c;
     const me = play.me;
     const q = play.question;
+    voiceTick(c);
     root.append(hostBubble(c), strip(c));
 
     if (play.stage === 'intro') {
@@ -265,13 +755,15 @@
       }
       const turn = play.round.mode === 'turn';
       let status = '';
-      if (turn && play.stage === 'question') status = me && me.isTurn ? '🎯 내 차례예요! 뒤 두 글자를 입력하세요' : `🎯 ${c.nameOf(play.turnId)}님 차례 — 훈수 금지! 🤐`;
+      if (turn && play.stage === 'question')
+        status = me && me.isTurn ? `🎯 내 차례예요! 뒤 두 글자를 ${V.on && SR ? '말하거나 ' : ''}입력하세요` : `🎯 ${c.nameOf(play.turnId)}님 차례 — 훈수 금지! 🤐`;
       else if (play.stage === 'steal') status = me && me.isTurn ? '🔥 스틸 찬스 — 다른 분들이 가로챌 차례예요' : '🔥 스틸 찬스! 먼저 맞히면 별을 가져가요';
       else {
         const total = play.participants.filter((id) => c.player(id) && !c.player(id).left).length;
         status = `채팅에 먼저 맞히면 별 ${play.round.points > 1 ? '2개 ⭐⭐' : '⭐'}${play.passed.length ? ` · 패스 ${play.passed.length}/${total}` : ''}`;
       }
       card.append(el('div', 'qs-status', status));
+      if (V.on && (myTurn(play) || V.mode !== 'idle' || V.note)) card.append(voicePanel(c));
       root.append(card);
       // 답 입력
       let canAnswer = !!me;
@@ -365,6 +857,7 @@
     renderSettings,
     render,
     onStage,
+    onChat,
     topbar(c) {
       const play = c.play;
       const r = play.round;
