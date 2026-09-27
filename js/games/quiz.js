@@ -34,7 +34,8 @@
   const PASS_WORD = /^(패스|몰라|몰라요|모르겠어|모르겠어요|모르겠다|모름)$/;
   const V = {
     on: readPref(),
-    unlocked: false, // 이 페이지에서 한 번 눌러 소리를 켰는지 (브라우저 자동 재생 제한)
+    unlocked: false, // 효과음이 실제로 켜졌는지 (브라우저 자동 재생 제한 — 사용자가 눌러야 풀림)
+    ttsPrimed: false, // 사용자 동작 안에서 읽어 주기를 한 번 해 두었는지
     actx: null,
     rec: null,
     c: null, // 가장 최근 화면 정보
@@ -79,8 +80,13 @@
       } catch {
         return null;
       }
+      V.actx.onstatechange = () => {
+        if (V.actx.state === 'running') markUnlocked(); // 소리가 실제로 켜진 순간
+        else V.unlocked = false; // 멈춤(다른 앱·화면 전환 등) — 다음 누름에서 다시 켠다
+      };
     }
     if (V.actx.state === 'suspended' || V.actx.state === 'interrupted') V.actx.resume().catch(() => {}); // interrupted: 아이폰에서 소리 길이 바뀔 때
+    else if (V.actx.state === 'running' && !V.unlocked) markUnlocked();
     return V.actx;
   }
   /** 모든 효과음이 지나가는 마지막 단 — 작은 소리는 키우고, 겹쳐서 커진 소리는 찢어지지 않게 부드럽게 눌러 준다 */
@@ -207,13 +213,17 @@
     session(V.on && V.unlocked && !V.rec && inQuiz() ? 'playback' : 'auto');
   }
 
-  /** 브라우저 자동 재생 제한 풀기 — 사용자가 누를 때 한 번 (방에 들어가는 홈 화면의 누름도 포함, 다른 게임 방에서는 안 함) */
-  function unlock() {
-    if (!V.on || V.unlocked || where() === 'other') return;
-    V.unlocked = true;
-    idleSession();
-    audio();
-    if (HAS_TTS) {
+  /**
+   * 브라우저 자동 재생 제한 풀기 — 누를 때마다 시도해서 소리가 실제로 켜질 때까지 (홈 화면에서 방에 들어가는 누름 포함, 다른 게임 방에서는 안 함).
+   * 휴대폰 브라우저(삼성 인터넷 등)는 손가락이 닿는 순간(pointerdown·touchstart)이 아니라 뗄 때(touchend·pointerup·click)만
+   * '사용자가 눌렀다'고 쳐 주므로, 닿는 순간 한 번만 시도하면 소리가 계속 막힌다.
+   */
+  function unlock(e) {
+    if (!V.on || where() === 'other') return;
+    // 읽어 주기: 사용자 동작 안에서 한 번 말해 두어야 나중에 저절로 읽을 수 있는 브라우저(아이폰)가 있다 — 확실한 동작에서만
+    const gesture = !e || ['touchend', 'click', 'keydown'].includes(e.type) || (e.type === 'pointerdown' && e.pointerType === 'mouse');
+    if (HAS_TTS && !V.ttsPrimed && gesture) {
+      V.ttsPrimed = true;
       try {
         const u = new window.SpeechSynthesisUtterance(' ');
         u.volume = 0;
@@ -222,9 +232,29 @@
         /* 무시 */
       }
     }
+    if (V.unlocked) return;
+    session(inQuiz() && !V.rec ? 'playback' : 'auto'); // 아이폰: 소리를 켜기 전에 소리 길부터
+    const ctx = audio(); // 이 안에서 resume
+    if (!ctx) return void markUnlocked(); // 효과음을 지원하지 않는 브라우저 — 더 풀 것이 없다
+    try {
+      // 아주 짧은 무음을 실제로 재생 — 사용자 동작 안에서 소리를 한 번 내야 풀리는 브라우저가 있다
+      const src = ctx.createBufferSource();
+      src.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+      src.connect(ctx.destination);
+      src.start(0);
+    } catch {
+      /* 무시 */
+    }
   }
-  document.addEventListener('pointerdown', unlock, true);
-  document.addEventListener('keydown', unlock, true);
+  /** 소리가 실제로 켜짐 — "🔊 눌러서 소리 켜기"를 거둔다 */
+  function markUnlocked() {
+    if (V.unlocked || !V.on || where() === 'other') return;
+    V.unlocked = true;
+    idleSession();
+    debug('unlocked', Date.now());
+    if (V.c) for (const b of document.querySelectorAll('.qs-voice-pills')) b.replaceWith(voicePill(V.c));
+  }
+  for (const type of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) document.addEventListener(type, unlock, true);
   // 화면이 바뀔 때 — 퀴즈쇼 방에 들어오면 'playback', 퀴즈쇼 방이 아니면 듣기·읽기를 멈추고 소리를 쉬게 (다른 게임·화면에 영향 없게).
   // 홈 화면에서 방에 들어가며 누른 것으로 풀린 소리는 퀴즈쇼 방까지 이어진다.
   let wasAt = where();
@@ -560,7 +590,7 @@
   }
   function voiceSupportNote() {
     if (SR && HAS_TTS)
-      return '기본으로 켜져 있어요. 사자성어 릴레이에서 내 차례가 되면 이 기기가 앞 두 글자를 읽어 주고, 말로 답하면 알아듣고 딩동댕·땡 소리를 내요. 빨리 맞히기에서는 🎤를 눌러 말로 답할 수 있어요. 기기 볼륨을 크게 해 두세요. 음성 인식은 브라우저(구글·애플)의 서비스를 사용해요.';
+      return '기본으로 켜져 있어요. 사자성어 릴레이에서 내 차례가 되면 이 기기가 앞 두 글자를 읽어 주고, 말로 답하면 알아듣고 딩동댕·땡 소리를 내요. 빨리 맞히기에서도 내가 맞히면 딩동댕, 틀리면 삐빅 — 🎤를 눌러 말로 답할 수도 있어요. 미디어 볼륨을 크게 해 두고 "🔊 소리 확인"으로 들어 보세요. 음성 인식은 브라우저(구글·애플)의 서비스를 사용해요.';
     if (HAS_TTS) return '이 브라우저는 음성 인식을 지원하지 않아 읽어 주기와 소리만 돼요 (말로 답하기는 크롬·엣지·사파리에서 가능).';
     return '이 브라우저는 음성 기능을 지원하지 않아 효과음만 나요.';
   }
@@ -691,6 +721,17 @@
     cb4.onchange = () => (cb4.checked ? enableVoice() : disableVoice());
     sw4.append(cb4, el('span', null, '🎙️ 음성 모드 — 내 차례에 문제를 읽어 주고 말로 답하기'));
     sec4.append(sw4, el('p', 'set-note', voiceSupportNote()));
+    const btns4 = el('div', 'qs-dev-btns');
+    if (V.on) {
+      const test = el('button', 'btn small', '🔊 소리 확인');
+      test.type = 'button';
+      test.title = '이 기기에서 효과음과 읽어 주기가 들리는지 확인해요';
+      test.onclick = () => {
+        unlock();
+        speak('소리가 잘 들리나요?', () => sfx('pass')); // 누른 순간 바로 읽고(아이폰), 끝나면 딩동댕
+      };
+      btns4.append(test);
+    }
     if (V.on && SR && V.mic !== 'granted') {
       const mic = el('button', 'btn small', V.mic === 'denied' ? '🎤 마이크가 막혀 있어요 (주소창 🔒에서 허용)' : '🎤 마이크 미리 허용하기');
       mic.type = 'button';
@@ -700,8 +741,9 @@
         mic.textContent = V.mic === 'granted' ? '✓ 마이크 준비됨' : '🎤 마이크가 막혀 있어요 (주소창 🔒에서 허용)';
         mic.disabled = true;
       };
-      sec4.append(mic);
+      btns4.append(mic);
     }
+    if (btns4.children.length) sec4.append(btns4);
     panel.append(sec4);
   }
 
