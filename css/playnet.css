@@ -491,8 +491,11 @@ input:disabled, select:disabled { opacity: .55; }
 .qs-award { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); font-size: 14px; }
 .qs-award .qa-icon { font-size: 18px; }
 .qs-result-extra { display: grid; gap: 6px; margin-bottom: 8px; text-align: center; }
-.qs-voice-pill { margin-left: auto; font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--muted); cursor: pointer; }
+.qs-voice-pills { margin-left: auto; display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.qs-voice-pill { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--muted); cursor: pointer; }
 .qs-voice-pill.on { color: #9be3b4; border-color: rgba(88, 204, 130, .55); background: rgba(88, 204, 130, .12); }
+.qs-voice-pill.warn { color: #ffcf73; border-color: rgba(255, 196, 92, .6); background: rgba(255, 196, 92, .12); }
+.qs-voice-pill.bad { color: #ffb3b5; border-color: rgba(229, 72, 77, .6); background: rgba(229, 72, 77, .12); }
 .qs-voice { margin-top: 12px; padding: 10px 12px; border-radius: 12px; background: rgba(255, 255, 255, .04); border: 1px dashed var(--line-strong); display: grid; gap: 6px; justify-items: center; }
 .qs-voice.listening { border-style: solid; border-color: rgba(88, 204, 130, .6); box-shadow: 0 0 0 1px rgba(88, 204, 130, .25); }
 .qs-voice.listening .qv-line::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #e5484d; margin-right: 6px; vertical-align: middle; animation: blink 1s ease-in-out infinite; }

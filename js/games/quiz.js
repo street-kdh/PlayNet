@@ -46,12 +46,15 @@
     note: '',
     retries: 0,
     typed: null, // 입력칸으로 보낸 답 — 틀렸을 때 삐빅
+    out: null, // 효과음 출력 (부드러운 리미터)
+    mic: 'unknown', // 마이크 권한: granted | denied | prompt | unknown
   };
+  /** 기본은 켜짐 — 이 기기에서 직접 끈 경우만 꺼짐 */
   function readPref() {
     try {
-      return localStorage.getItem('playnet.quiz.voice') === '1';
+      return localStorage.getItem('playnet.quiz.voice') !== '0';
     } catch {
-      return false;
+      return true;
     }
   }
   function savePref(on) {
@@ -77,30 +80,58 @@
         return null;
       }
     }
-    if (V.actx.state === 'suspended') V.actx.resume().catch(() => {});
+    if (V.actx.state === 'suspended' || V.actx.state === 'interrupted') V.actx.resume().catch(() => {}); // interrupted: 아이폰에서 소리 길이 바뀔 때
     return V.actx;
   }
-  function tone(freq, at, dur, type = 'sine', vol = 0.2) {
+  /** 모든 효과음이 지나가는 마지막 단 — 작은 소리는 키우고, 겹쳐서 커진 소리는 찢어지지 않게 부드럽게 눌러 준다 */
+  function output() {
     const ctx = audio();
-    if (!ctx) return;
-    const t0 = ctx.currentTime + at;
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-    o.type = type;
-    o.frequency.setValueAtTime(freq, t0);
-    g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.015);
-    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    o.connect(g);
-    g.connect(ctx.destination);
-    o.start(t0);
-    o.stop(t0 + dur + 0.05);
+    if (!ctx) return null;
+    if (!V.out) {
+      const shaper = ctx.createWaveShaper();
+      const n = 2048;
+      const curve = new Float32Array(n);
+      const k = 1.8;
+      for (let i = 0; i < n; i++) {
+        const x = (i / (n - 1)) * 2 - 1;
+        curve[i] = Math.tanh(k * x) / Math.tanh(k);
+      }
+      shaper.curve = curve;
+      shaper.oversample = '2x';
+      shaper.connect(ctx.destination);
+      V.out = shaper;
+    }
+    return V.out;
   }
+  /** 음 하나 (+ 배음들) — partials: [[주파수 배수, 세기 비율], ...] */
+  function tone(freq, at, dur, type = 'sine', vol = 0.6, partials = []) {
+    const ctx = audio();
+    const out = output();
+    if (!ctx || !out) return;
+    const t0 = ctx.currentTime + at;
+    const voice = (f, v, d, ty) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = ty;
+      o.frequency.setValueAtTime(f, t0);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(Math.max(0.0002, v), t0 + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+      o.connect(g);
+      g.connect(out);
+      o.start(t0);
+      o.stop(t0 + d + 0.05);
+    };
+    voice(freq, vol, dur, type);
+    for (const [ratio, amp] of partials) voice(freq * ratio, vol * amp, dur * 0.7, 'sine');
+  }
+  // 휴대폰 스피커는 낮은 소리를 잘 못 내므로 500Hz 이상 + 배음으로 또렷하고 크게
+  const BELL = [[2, 0.45], [3, 0.2], [4.2, 0.08]];
   const SFX = {
-    turn: () => (tone(988, 0, 0.16, 'triangle', 0.18), tone(1319, 0.13, 0.3, 'triangle', 0.18)), // 띠링
-    pass: () => (tone(784, 0, 0.45, 'sine', 0.25), tone(659, 0.2, 0.45, 'sine', 0.25), tone(1047, 0.42, 0.8, 'sine', 0.28)), // 딩동댕
-    wrong: () => (tone(196, 0, 0.12, 'square', 0.07), tone(196, 0.16, 0.14, 'square', 0.07)), // 삐빅
-    fail: () => (tone(311, 0, 0.32, 'sawtooth', 0.09), tone(233, 0.3, 0.7, 'sawtooth', 0.09)), // 땡~
+    turn: () => (tone(1319, 0, 0.22, 'triangle', 0.8, [[2, 0.35]]), tone(1760, 0.15, 0.5, 'triangle', 0.8, [[2, 0.35]])), // 띠링
+    pass: () => (tone(784, 0, 0.6, 'sine', 0.7, BELL), tone(659, 0.22, 0.6, 'sine', 0.7, BELL), tone(1047, 0.46, 1.2, 'sine', 0.8, BELL)), // 딩동댕
+    wrong: () => (tone(415, 0, 0.17, 'square', 0.55), tone(415, 0.22, 0.24, 'square', 0.55)), // 삐빅
+    fail: () => (tone(523, 0, 1.5, 'sine', 0.75, [[2.0, 0.55], [2.76, 0.45], [5.4, 0.25], [8.93, 0.12]]), tone(262, 0, 0.4, 'triangle', 0.55)), // 땡~ (종)
   };
   function sfx(name) {
     if (!V.on) return;
@@ -135,6 +166,7 @@
       const u = new window.SpeechSynthesisUtterance(text);
       u.lang = 'ko-KR';
       u.rate = 0.9;
+      u.volume = 1;
       const v = koVoice();
       if (v) u.voice = v;
       u.onend = fin;
@@ -153,10 +185,33 @@
     }
   }
 
-  /** 브라우저 자동 재생 제한 풀기 — 사용자가 누를 때 한 번 */
+  /**
+   * 소리 길 (아이폰 사파리의 navigator.audioSession) — 바꿨으면 true.
+   * 평소엔 'playback': 무음 스위치를 켜 둬도 소리가 나고, 마이크를 쓴 뒤 작아진 소리도 원래 크기로.
+   * 마이크로 듣는 동안만 'auto'(녹음되는 기본값), 퀴즈쇼 방을 나가거나 음성을 끄면 'auto'로 되돌린다.
+   */
+  function session(type) {
+    try {
+      const s = navigator.audioSession;
+      if (!s || s.type === type) return false;
+      s.type = type;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const inQuiz = () => document.body.classList.contains('game-quiz');
+  /** 지금 화면: 퀴즈쇼 방 · 홈 · 다른 게임 방 */
+  const where = () => (inQuiz() ? 'quiz' : document.body.classList.contains('screen-home') ? 'home' : 'other');
+  function idleSession() {
+    session(V.on && V.unlocked && !V.rec && inQuiz() ? 'playback' : 'auto');
+  }
+
+  /** 브라우저 자동 재생 제한 풀기 — 사용자가 누를 때 한 번 (방에 들어가는 홈 화면의 누름도 포함, 다른 게임 방에서는 안 함) */
   function unlock() {
-    if (!V.on || V.unlocked) return;
+    if (!V.on || V.unlocked || where() === 'other') return;
     V.unlocked = true;
+    idleSession();
     audio();
     if (HAS_TTS) {
       try {
@@ -170,6 +225,53 @@
   }
   document.addEventListener('pointerdown', unlock, true);
   document.addEventListener('keydown', unlock, true);
+  // 화면이 바뀔 때 — 퀴즈쇼 방에 들어오면 'playback', 퀴즈쇼 방이 아니면 듣기·읽기를 멈추고 소리를 쉬게 (다른 게임·화면에 영향 없게).
+  // 홈 화면에서 방에 들어가며 누른 것으로 풀린 소리는 퀴즈쇼 방까지 이어진다.
+  let wasAt = where();
+  new MutationObserver(() => {
+    const now = where();
+    if (now === wasAt) return;
+    const left = wasAt === 'quiz';
+    wasAt = now;
+    if (now === 'quiz') return void idleSession();
+    if (left) {
+      stopListening();
+      hush();
+    }
+    session('auto');
+    V.unlocked = false; // 다음 누름(홈 화면·퀴즈쇼 방)에서 다시 푼다
+    if (V.actx && V.actx.state === 'running') V.actx.suspend().catch(() => {});
+  }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+  // 마이크 권한 — 미리 허용해 두면 내 차례에 바로 듣는다 (허용 창이 차례 중에 뜨지 않게)
+  (async () => {
+    try {
+      if (!SR || !navigator.permissions || !navigator.permissions.query) return;
+      const st = await navigator.permissions.query({ name: 'microphone' });
+      V.mic = st.state;
+      st.onchange = () => {
+        V.mic = st.state;
+      };
+    } catch {
+      /* 권한 조회를 지원하지 않는 브라우저 */
+    }
+  })();
+  async function askMic() {
+    unlock();
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return false;
+    try {
+      session('auto');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop());
+      V.mic = 'granted';
+      return true;
+    } catch {
+      V.mic = 'denied';
+      return false;
+    } finally {
+      idleSession();
+    }
+  }
 
   // 듣기 (음성 인식)
   function stopListening() {
@@ -182,16 +284,17 @@
     } catch {
       /* 무시 */
     }
+    idleSession();
   }
-  /** 한 마디 듣기 — 말이 끝나면 onFinal(후보들), 아무 말도 없으면 onNothing() */
-  function listen(onFinal, onNothing) {
-    if (!SR) return false;
+  /** 한 마디 듣기 — 말이 끝나면 onFinal(후보들), 아무 말도 없으면 onNothing(), 듣기를 시작하지 못하면 onFail() */
+  function listen(onFinal, onNothing, onFail) {
+    if (!SR) return void onFail();
     stopListening();
     let rec;
     try {
       rec = new SR();
     } catch {
-      return false;
+      return void onFail();
     }
     rec.lang = 'ko-KR';
     rec.interimResults = true;
@@ -217,6 +320,7 @@
     rec.onend = () => {
       if (V.rec !== rec) return;
       V.rec = null;
+      idleSession();
       if (final && final.length) onFinal(final);
       else if (blocked) {
         V.mode = 'tap';
@@ -225,14 +329,15 @@
       } else if (onNothing) onNothing();
     };
     V.rec = rec;
+    session('auto'); // 아이폰: 듣는 동안만 녹음되는 소리 길로 (누른 흐름이 끊기지 않게 기다리지 않고 바로)
     try {
       rec.start();
     } catch {
       V.rec = null;
-      return false;
+      idleSession();
+      return void onFail();
     }
     debug('listen', Date.now());
-    return true;
   }
 
   // 내 차례 흐름
@@ -274,7 +379,7 @@
     V.heard = '';
     if (V.note && !V.note.startsWith('“')) V.note = '';
     paint();
-    const ok = listen(
+    listen(
       (alts) => answerByVoice(alts, key),
       () => {
         if (stillMyTurn(key) && V.retries++ < 8) turnListen(key);
@@ -282,13 +387,13 @@
           V.mode = 'idle';
           paint();
         }
+      },
+      () => {
+        V.mode = 'tap';
+        V.note = '버튼을 눌러 말해 보세요.';
+        paint();
       }
     );
-    if (!ok) {
-      V.mode = 'tap';
-      V.note = '버튼을 눌러 말해 보세요.';
-      paint();
-    }
   }
   /** 입력칸의 🎤 — 빨리 맞히기·스틸에서 한 마디 */
   function pushToTalk() {
@@ -298,19 +403,19 @@
     V.heard = '';
     V.note = '';
     paint();
-    const ok = listen(
+    listen(
       (alts) => answerByVoice(alts, null),
       () => {
         V.mode = 'idle';
         V.note = '아무 말도 들리지 않았어요.';
         paint();
+      },
+      () => {
+        V.mode = 'idle';
+        V.note = SR ? '듣기를 시작하지 못했어요 — 입력칸에 답해 주세요.' : '이 브라우저는 음성 인식을 지원하지 않아요.';
+        paint();
       }
     );
-    if (!ok) {
-      V.mode = 'idle';
-      V.note = '이 브라우저는 음성 인식을 지원하지 않아요.';
-      paint();
-    }
   }
   async function answerByVoice(alts, turnKey) {
     const c = V.c;
@@ -437,15 +542,8 @@
     V.unlocked = false;
     unlock();
     speak('음성 모드를 켰어요');
-    if (SR && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach((t) => t.stop());
-        V.note = '';
-      } catch {
-        V.note = '마이크를 쓸 수 없어요 — 주소창에서 마이크를 허용해 주세요.';
-      }
-    }
+    sfx('turn');
+    if (SR && V.mic !== 'granted') await askMic();
     if (V.c) voiceTick(V.c);
     paint();
   }
@@ -454,6 +552,7 @@
     hush();
     V.on = false;
     savePref(false);
+    idleSession();
     V.mode = 'idle';
     V.note = '';
     V.heard = '';
@@ -461,21 +560,48 @@
   }
   function voiceSupportNote() {
     if (SR && HAS_TTS)
-      return '사자성어 릴레이에서 내 차례가 되면 이 기기가 앞 두 글자를 읽어 주고, 말로 답하면 알아듣고 딩동댕·땡 소리를 내요. 빨리 맞히기에서는 🎤를 눌러 말로 답할 수 있어요. 음성 인식은 브라우저(구글·애플)의 서비스를 사용해요.';
+      return '기본으로 켜져 있어요. 사자성어 릴레이에서 내 차례가 되면 이 기기가 앞 두 글자를 읽어 주고, 말로 답하면 알아듣고 딩동댕·땡 소리를 내요. 빨리 맞히기에서는 🎤를 눌러 말로 답할 수 있어요. 기기 볼륨을 크게 해 두세요. 음성 인식은 브라우저(구글·애플)의 서비스를 사용해요.';
     if (HAS_TTS) return '이 브라우저는 음성 인식을 지원하지 않아 읽어 주기와 소리만 돼요 (말로 답하기는 크롬·엣지·사파리에서 가능).';
     return '이 브라우저는 음성 기능을 지원하지 않아 효과음만 나요.';
   }
   function voicePill(c) {
-    const b = c.el('button', 'qs-voice-pill' + (V.on ? ' on' : ''), V.on ? '🎙️ 음성 켜짐' : '🔈 음성 꺼짐');
+    const { el } = c;
+    const box = el('span', 'qs-voice-pills');
+    const b = el('button', 'qs-voice-pill' + (V.on ? ' on' : ''), V.on ? '🎙️ 음성 켜짐' : '🔈 음성 꺼짐');
     b.type = 'button';
     b.title = voiceSupportNote();
     b.onclick = async () => {
       if (V.on) disableVoice();
       else await enableVoice();
-      b.textContent = V.on ? '🎙️ 음성 켜짐' : '🔈 음성 꺼짐';
-      b.classList.toggle('on', V.on);
+      box.replaceWith(voicePill(c));
     };
-    return b;
+    box.append(b);
+    if (V.on && !V.unlocked) {
+      const t = el('button', 'qs-voice-pill warn', '🔊 눌러서 소리 켜기');
+      t.type = 'button';
+      t.onclick = () => {
+        unlock();
+        sfx('turn');
+        box.replaceWith(voicePill(c));
+      };
+      box.append(t);
+    }
+    if (V.on && SR && V.mic === 'prompt') {
+      const m = el('button', 'qs-voice-pill warn', '🎤 마이크 허용');
+      m.type = 'button';
+      m.title = '미리 허용해 두면 내 차례에 바로 말로 답할 수 있어요';
+      m.onclick = async () => {
+        await askMic();
+        box.replaceWith(voicePill(c));
+      };
+      box.append(m);
+    } else if (V.on && SR && V.mic === 'denied') {
+      const m = el('button', 'qs-voice-pill bad', '🎤 마이크 막힘');
+      m.type = 'button';
+      m.onclick = () => c.toast('주소창의 🔒(사이트 설정)에서 마이크를 허용해 주세요. 입력칸으로도 답할 수 있어요.', true);
+      box.append(m);
+    }
+    return box;
   }
 
   /** 새 대화 — 입력칸으로 보낸 내 답이 틀렸으면 삐빅 */
@@ -565,6 +691,17 @@
     cb4.onchange = () => (cb4.checked ? enableVoice() : disableVoice());
     sw4.append(cb4, el('span', null, '🎙️ 음성 모드 — 내 차례에 문제를 읽어 주고 말로 답하기'));
     sec4.append(sw4, el('p', 'set-note', voiceSupportNote()));
+    if (V.on && SR && V.mic !== 'granted') {
+      const mic = el('button', 'btn small', V.mic === 'denied' ? '🎤 마이크가 막혀 있어요 (주소창 🔒에서 허용)' : '🎤 마이크 미리 허용하기');
+      mic.type = 'button';
+      mic.disabled = V.mic === 'denied';
+      mic.onclick = async () => {
+        await askMic();
+        mic.textContent = V.mic === 'granted' ? '✓ 마이크 준비됨' : '🎤 마이크가 막혀 있어요 (주소창 🔒에서 허용)';
+        mic.disabled = true;
+      };
+      sec4.append(mic);
+    }
     panel.append(sec4);
   }
 
