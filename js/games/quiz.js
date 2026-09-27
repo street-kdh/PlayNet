@@ -28,12 +28,14 @@
   //  릴레이에서 내 차례가 되면: 띠링 → 이 기기가 문제 앞부분을 읽어 줌("훈민") → 듣기 → 말한 답을 서버가 판정
   //  → 딩동댕(정답) · 삐빅(틀림 — 시간이 남으면 다시 듣기) · 땡(차례 실패). 다른 사람 차례에는 조용히 있다.
   //  빨리 맞히기·스틸에서는 답 입력칸의 🎤 를 눌러 말로 답할 수 있다.
+  //  사회자 목소리(따로 켜고 끔): MC 또랑의 멘트를 서버가 보낸 읽기용 문장(speech)으로 읽어 준다.
   //  브라우저의 음성 합성(speechSynthesis)·음성 인식(SpeechRecognition — 크롬·엣지·사파리)을 쓴다.
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition || null;
   const HAS_TTS = 'speechSynthesis' in window && typeof window.SpeechSynthesisUtterance === 'function';
   const PASS_WORD = /^(패스|몰라|몰라요|모르겠어|모르겠어요|모르겠다|모름)$/;
   const V = {
-    on: readPref(),
+    on: readPref('playnet.quiz.voice'), // 음성 모드: 내 차례 읽어 주기·말로 답하기·효과음
+    host: readPref('playnet.quiz.host'), // 사회자 목소리: MC 또랑의 멘트를 읽어 주기
     unlocked: false, // 효과음이 실제로 켜졌는지 (브라우저 자동 재생 제한 — 사용자가 눌러야 풀림)
     ttsPrimed: false, // 사용자 동작 안에서 읽어 주기를 한 번 해 두었는지
     actx: null,
@@ -51,16 +53,16 @@
     mic: 'unknown', // 마이크 권한: granted | denied | prompt | unknown
   };
   /** 기본은 켜짐 — 이 기기에서 직접 끈 경우만 꺼짐 */
-  function readPref() {
+  function readPref(key) {
     try {
-      return localStorage.getItem('playnet.quiz.voice') !== '0';
+      return localStorage.getItem(key) !== '0';
     } catch {
       return true;
     }
   }
-  function savePref(on) {
+  function savePref(key, on) {
     try {
-      localStorage.setItem('playnet.quiz.voice', on ? '1' : '0');
+      localStorage.setItem(key, on ? '1' : '0');
     } catch {
       /* 저장 안 돼도 이번 접속 동안은 유지 */
     }
@@ -157,37 +159,138 @@
       return null;
     }
   }
-  function speak(text, done) {
+  /**
+   * 한 번에 한 말만 — kind: 'prompt'(내 차례 문제 읽기 등, 먼저) | 'host'(사회자 멘트).
+   * 다른 말이 끼어들어 끊긴 말은 done 을 부르지 않는다. 끝나면 줄 서 있던 사회자 멘트를 이어서 읽는다.
+   */
+  const T = { id: 0, kind: null, queue: [] };
+  const HOST_VOICE = { rate: 1.05, pitch: 1.05 };
+  function utter(text, { kind = 'prompt', rate = 0.9, pitch = 1, done = null } = {}) {
+    const id = ++T.id;
+    T.kind = kind;
     let finished = false;
     const fin = () => {
       if (finished) return;
       finished = true;
+      if (T.id !== id) return;
+      T.kind = null;
       if (done) done();
+      flushHost();
     };
-    if (!V.on || !text) return void setTimeout(fin, 0);
-    debug('tts', text);
-    if (!HAS_TTS) return void setTimeout(fin, 0);
+    if (kind === 'host') {
+      const play = V.c && V.c.play;
+      debug('host', { text, stage: play && play.stage, mode: play && play.round && play.round.mode });
+    } else debug('tts', text);
+    if (!HAS_TTS || !text) return void setTimeout(fin, 0);
+    const go = () => {
+      if (T.id !== id) return;
+      try {
+        const u = new window.SpeechSynthesisUtterance(text);
+        u.lang = 'ko-KR';
+        u.rate = rate;
+        u.pitch = pitch;
+        u.volume = 1;
+        const v = koVoice();
+        if (v) u.voice = v;
+        u.onend = fin;
+        u.onerror = fin;
+        window.speechSynthesis.speak(u);
+      } catch {
+        setTimeout(fin, 0);
+      }
+    };
+    let busy = false;
     try {
-      window.speechSynthesis.cancel();
-      const u = new window.SpeechSynthesisUtterance(text);
-      u.lang = 'ko-KR';
-      u.rate = 0.9;
-      u.volume = 1;
-      const v = koVoice();
-      if (v) u.voice = v;
-      u.onend = fin;
-      u.onerror = fin;
-      window.speechSynthesis.speak(u);
+      busy = !!(window.speechSynthesis.speaking || window.speechSynthesis.pending);
+      if (busy) window.speechSynthesis.cancel();
     } catch {
-      return void setTimeout(fin, 0);
+      /* 무시 */
     }
-    setTimeout(fin, 1200 + String(text).length * 400); // 끝났다는 알림이 오지 않는 브라우저 대비
+    if (busy) setTimeout(go, 80); // 끊자마자 말하면 소리가 안 나는 브라우저가 있어 잠깐 쉬었다가
+    else go();
+    // 끝났다는 알림이 오지 않는 브라우저 대비
+    setTimeout(fin, kind === 'host' ? 1500 + String(text).length * 250 : 1200 + String(text).length * 400);
+  }
+  /** 내 차례 문제 읽기 등 — 사회자 멘트보다 먼저 (줄 서 있던 멘트는 접는다) */
+  function speak(text, done) {
+    if (!V.on) return void setTimeout(() => done && done(), 0);
+    T.queue = [];
+    utter(text, { kind: 'prompt', done });
   }
   function hush() {
+    T.id++;
+    T.kind = null;
+    T.queue = [];
     try {
       if (HAS_TTS) window.speechSynthesis.cancel();
     } catch {
       /* 무시 */
+    }
+  }
+
+  // 사회자 멘트 읽어 주기 (이 기기만) — 서버가 보낸 읽기용 문장(speech)을 한 번에 하나씩.
+  //  새 문제 멘트는 하던 말을 끊고 바로, 나머지는 줄을 서되 오래된 것은 버리고, 가벼운 말(놀리기 등)은 바쁘면 건너뛴다.
+  //  사자성어 릴레이에서 누군가 말로 답하는 동안, 그리고 내 차례(읽기·듣기) 중에는 조용히 — 마이크에 섞이지 않게.
+  const HOST_MINOR = /^(extras|extrasNoDouble|streak3|streak5|leadChange|close|wrongFunny|spoiler)$/;
+  const RELAY_END = /^(turnFail|turnPass|turnLeft|turnSkip|turnCorrect|stealCorrect|stealFail|timeout|allPass)$/;
+  const JAMO_NAMES = {
+    ㄱ: '기역', ㄲ: '쌍기역', ㄴ: '니은', ㄷ: '디귿', ㄸ: '쌍디귿', ㄹ: '리을', ㅁ: '미음', ㅂ: '비읍', ㅃ: '쌍비읍', ㅅ: '시옷',
+    ㅆ: '쌍시옷', ㅇ: '이응', ㅈ: '지읒', ㅉ: '쌍지읒', ㅊ: '치읓', ㅋ: '키읔', ㅌ: '티읕', ㅍ: '피읖', ㅎ: '히읗',
+  };
+  /** 읽기용 문장이 없는 이전 서버의 멘트를 다듬기 (서버의 host.js 와 같은 규칙 + 초성 이름) */
+  function tidySpeech(s) {
+    return String(s || '')
+      .replace(/(^|\s)(ㅋ{2,}|ㅎ{2,})(?=\s|$|[!?.~])/g, '$1')
+      .replace(/[ㄱ-ㅎ]/g, (j) => (JAMO_NAMES[j] ? ` ${JAMO_NAMES[j]} ` : ''))
+      .replace(/[「」『』]/g, ' ')
+      .replace(/\s*○+/g, '')
+      .replace(/⭐\s*(\d+)/g, '별 $1개')
+      .replace(/[→—]/g, ', ')
+      .replace(/~+/g, ',')
+      .replace(/…/g, '')
+      .replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}\u{20E3}]/gu, '')
+      .replace(/\(\s*\)/g, '')
+      .replace(/\(\s+/g, '(')
+      .replace(/\s+([!?.,)])/g, '$1')
+      .replace(/,(\s*,)+/g, ',')
+      .replace(/,\s*([!?.])/g, '$1')
+      .replace(/\s{2,}/g, ' ')
+      .replace(/^[\s,]+|[\s,]+$/g, '');
+  }
+  function relayQuiet(m) {
+    const key = (m && m.key) || '';
+    if (key === 'q_idiom' || (!key && m && /○○」/.test(m.text || ''))) return true; // 릴레이 차례 알림 — 답하는 사람 기기가 직접 읽는다
+    if (RELAY_END.test(key)) return false; // 차례가 끝났다는 멘트는 읽는다 (화면이 바뀌기 전에 올 수 있어서)
+    const play = V.c && V.c.play;
+    return !!(play && play.round && play.round.mode === 'turn' && play.stage === 'question');
+  }
+  const myVoiceBusy = () => T.kind === 'prompt' || !!V.rec || ['reading', 'listening', 'checking'].includes(V.mode);
+  function hostNow(item) {
+    utter(item.text, { kind: 'host', ...HOST_VOICE });
+  }
+  function hostSay(m) {
+    if (!V.host || !HAS_TTS || where() !== 'quiz') return;
+    const text = m.speech || tidySpeech(m.text);
+    if (!text || relayQuiet(m) || myVoiceBusy()) return;
+    const item = { text, key: m.key || '', at: Date.now() };
+    if (!T.kind) return void hostNow(item);
+    if (item.key.startsWith('q_')) {
+      T.queue = [];
+      return void hostNow(item); // 새 문제는 하던 사회자 말을 끊고 바로
+    }
+    if (HOST_MINOR.test(item.key)) {
+      if (!T.queue.length) T.queue.push(item);
+      return;
+    }
+    T.queue.push(item);
+    if (T.queue.length > 3) T.queue.shift();
+  }
+  function flushHost() {
+    while (T.queue.length && !T.kind) {
+      const it = T.queue.shift();
+      const maxAge = HOST_MINOR.test(it.key) ? 4000 : 8000;
+      if (Date.now() - it.at > maxAge || !V.host || relayQuiet(it) || myVoiceBusy()) continue;
+      return void hostNow(it);
     }
   }
 
@@ -219,7 +322,7 @@
    * '사용자가 눌렀다'고 쳐 주므로, 닿는 순간 한 번만 시도하면 소리가 계속 막힌다.
    */
   function unlock(e) {
-    if (!V.on || where() === 'other') return;
+    if (!(V.on || V.host) || where() === 'other') return;
     // 읽어 주기: 사용자 동작 안에서 한 번 말해 두어야 나중에 저절로 읽을 수 있는 브라우저(아이폰)가 있다 — 확실한 동작에서만
     const gesture = !e || ['touchend', 'click', 'keydown'].includes(e.type) || (e.type === 'pointerdown' && e.pointerType === 'mouse');
     if (HAS_TTS && !V.ttsPrimed && gesture) {
@@ -232,7 +335,7 @@
         /* 무시 */
       }
     }
-    if (V.unlocked) return;
+    if (!V.on || V.unlocked) return; // 효과음은 음성 모드에서만
     session(inQuiz() && !V.rec ? 'playback' : 'auto'); // 아이폰: 소리를 켜기 전에 소리 길부터
     const ctx = audio(); // 이 안에서 resume
     if (!ctx) return void markUnlocked(); // 효과음을 지원하지 않는 브라우저 — 더 풀 것이 없다
@@ -358,6 +461,7 @@
         paint();
       } else if (onNothing) onNothing();
     };
+    if (T.kind) hush(); // 읽던 말(사회자 멘트 등)이 마이크에 섞이지 않게
     V.rec = rec;
     session('auto'); // 아이폰: 듣는 동안만 녹음되는 소리 길로 (누른 흐름이 끊기지 않게 기다리지 않고 바로)
     try {
@@ -480,6 +584,8 @@
   function voiceTick(c) {
     V.c = c;
     const play = c.play;
+    // 릴레이에서 누군가 답하기 시작하면 읽던 사회자 멘트를 멈춘다 (한자리에 모여 있으면 답하는 사람의 마이크에 섞이므로)
+    if (T.kind === 'host' && relayQuiet(null)) hush();
     if (!V.on || !play) return;
     const key = qKey(play);
     if (myTurn(play) && V.turnKey !== key) startTurn(play);
@@ -502,7 +608,7 @@
           V.failKey = key;
           sfx('fail');
         }
-        setTimeout(() => speak(`정답은 ${r.answer}`), 900); // 내 차례에 못 맞혔으면 정답을 읽어 준다
+        if (!V.host) setTimeout(() => speak(`정답은 ${r.answer}`), 900); // 내 차례에 못 맞혔으면 정답을 읽어 준다 (사회자 목소리가 켜져 있으면 사회자가 말함)
       }
       V.mode = 'idle';
       V.heard = '';
@@ -568,7 +674,7 @@
 
   async function enableVoice() {
     V.on = true;
-    savePref(true);
+    savePref('playnet.quiz.voice', true);
     V.unlocked = false;
     unlock();
     speak('음성 모드를 켰어요');
@@ -581,12 +687,24 @@
     stopListening();
     hush();
     V.on = false;
-    savePref(false);
+    savePref('playnet.quiz.voice', false);
     idleSession();
     V.mode = 'idle';
     V.note = '';
     V.heard = '';
     paint();
+  }
+  function setHostVoice(on) {
+    V.host = on;
+    savePref('playnet.quiz.host', on);
+    if (on) {
+      unlock();
+      T.queue = [];
+      if (!myVoiceBusy()) utter('사회자 목소리를 켰어요', { kind: 'host', ...HOST_VOICE });
+    } else if (T.kind === 'host' || T.queue.length) hush();
+  }
+  function hostVoiceNote() {
+    return '기본으로 켜져 있어요. 문제·힌트·정답·결과 같은 MC 또랑의 멘트를 이 기기에서 읽어 줘요. 한자리에 모여 여러 기기로 할 때는 한 기기만 켜 두면 소리가 겹치지 않아요. 사자성어 릴레이에서 누군가 말로 답하는 동안은 조용히 해요.';
   }
   function voiceSupportNote() {
     if (SR && HAS_TTS)
@@ -606,6 +724,16 @@
       box.replaceWith(voicePill(c));
     };
     box.append(b);
+    if (HAS_TTS) {
+      const h = el('button', 'qs-voice-pill' + (V.host ? ' on' : ''), V.host ? '📢 사회자 켜짐' : '🔇 사회자 꺼짐');
+      h.type = 'button';
+      h.title = hostVoiceNote();
+      h.onclick = () => {
+        setHostVoice(!V.host);
+        box.replaceWith(voicePill(c));
+      };
+      box.append(h);
+    }
     if (V.on && !V.unlocked) {
       const t = el('button', 'qs-voice-pill warn', '🔊 눌러서 소리 켜기');
       t.type = 'button';
@@ -636,6 +764,7 @@
 
   /** 새 대화 — 입력칸으로 보낸 내 답이 틀렸으면 삐빅 */
   function onChat(c, m) {
+    if (m.kind === 'host') return void hostSay(m);
     if (!V.on || !V.typed || m.from !== c.me.id || m.voice) return;
     const t = V.typed;
     if (Date.now() - t.at > 4000) {
@@ -721,14 +850,29 @@
     cb4.onchange = () => (cb4.checked ? enableVoice() : disableVoice());
     sw4.append(cb4, el('span', null, '🎙️ 음성 모드 — 내 차례에 문제를 읽어 주고 말로 답하기'));
     sec4.append(sw4, el('p', 'set-note', voiceSupportNote()));
+    if (HAS_TTS) {
+      const sw5 = el('label', 'switch');
+      const cb5 = el('input');
+      cb5.type = 'checkbox';
+      cb5.checked = V.host;
+      cb5.onchange = () => setHostVoice(cb5.checked);
+      sw5.append(cb5, el('span', null, '📢 사회자 목소리 — MC 또랑의 멘트를 읽어 주기'));
+      sec4.append(sw5, el('p', 'set-note', hostVoiceNote()));
+    }
     const btns4 = el('div', 'qs-dev-btns');
-    if (V.on) {
+    if (V.on || (V.host && HAS_TTS)) {
       const test = el('button', 'btn small', '🔊 소리 확인');
       test.type = 'button';
-      test.title = '이 기기에서 효과음과 읽어 주기가 들리는지 확인해요';
+      test.title = '이 기기에서 읽어 주기와 효과음이 들리는지 확인해요';
       test.onclick = () => {
         unlock();
-        speak('소리가 잘 들리나요?', () => sfx('pass')); // 누른 순간 바로 읽고(아이폰), 끝나면 딩동댕
+        T.queue = [];
+        // 누른 순간 바로 읽고(아이폰은 사용자 동작 안에서 읽어야 함), 끝나면 딩동댕
+        utter(V.host ? 'MC 또랑입니다! 소리가 잘 들리나요?' : '소리가 잘 들리나요?', {
+          kind: 'prompt',
+          ...(V.host ? HOST_VOICE : {}),
+          done: () => sfx('pass'),
+        });
       };
       btns4.append(test);
     }
