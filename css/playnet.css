@@ -236,6 +236,14 @@ input:disabled, select:disabled { opacity: .55; }
 .banner small { display: block; font-family: var(--sans); font-size: 13px; font-weight: 400; color: var(--muted); margin-top: 6px; line-height: 1.6; }
 .banner.alert { border-color: rgba(200,40,46,0.5); background: linear-gradient(180deg, var(--red-dim), var(--panel)); }
 .banner.accent { border-color: var(--accent); background: linear-gradient(180deg, var(--accent-dim), var(--panel)); }
+.banner .step-timer { display: inline-block; margin-left: 10px; padding: 1px 10px; border-radius: 999px; font-family: var(--sans); font-size: 14px; font-weight: 700; background: rgba(255,255,255,0.06); border: 1px solid var(--line-strong); font-variant-numeric: tabular-nums; vertical-align: middle; }
+.banner .countdown.urgent { color: #ffb3b5; }
+.team-picks { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 10px; font-family: var(--sans); font-size: 13px; font-weight: 400; }
+.team-picks .tp { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line-strong); background: rgba(255,255,255,0.04); color: var(--muted); }
+.team-picks .tp b { color: var(--text); font-weight: 700; }
+.team-picks .tp.on { border-color: rgba(200,40,46,0.6); background: var(--red-dim); color: #ffb3b5; }
+.team-picks .tp.none { border-style: dashed; }
+.team-picks .tp.wait { opacity: .75; }
 
 .player-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .pcard { position: relative; text-align: center; padding: 18px 10px 14px; border-radius: var(--radius); background: var(--panel); border: 1px solid var(--line); transition: transform .15s, border-color .15s, box-shadow .15s, opacity .3s; user-select: none; }

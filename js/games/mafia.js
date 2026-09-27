@@ -89,16 +89,82 @@
     panel.append(sec3);
   }
 
+  /**
+   * 마피아 공동 선택 (서버 1.2.2+: a.step 이 있음)
+   *  여러 명: ① 예정자 선택(10초) → ② 예정자 중 최종 선택 → 결정 (가장 많이 고른 대상, 동률이면 무작위)
+   *  한 명:   바로 최종 선택. 어느 단계든 "아무도 선택하지 않음"을 고를 수 있다.
+   */
+  const isTeamKill = (a) => !!(a && a.type === 'night' && a.action === 'kill' && a.step);
+  const pickName = (c, id) => (id && id !== 'none' ? `${c.nameOf(id)}님` : '아무도 선택하지 않음');
+  const teamPicks = (a) => (a.step === 'final' ? a.finals : a.nominees) || [];
+
+  function killBanner(c, a) {
+    if (a.step === 'done') {
+      const d = a.decided || {};
+      if (d.targetId) {
+        return {
+          title: `오늘 밤 대상: ${c.nameOf(d.targetId)}`,
+          sub: `${a.team && d.by ? `${d.by}님이 움직입니다 · ` : ''}능력을 가진 사람이 모두 고르면 바로 아침이 됩니다`,
+        };
+      }
+      return {
+        title: '오늘 밤은 아무도 해치지 않습니다',
+        sub: a.team ? '예정자가 없거나 모두 "아무도 선택하지 않음"을 골랐어요 · 아침을 기다리세요' : '아침을 기다리세요',
+      };
+    }
+    if (!a.team) {
+      return {
+        title: a.prompt,
+        sub: '카드를 누르면 바로 확정됩니다 · 아무도 해치지 않으려면 "아무도 선택하지 않음"을 누르세요',
+      };
+    }
+    if (a.step === 'nominate') {
+      return {
+        title: '① 예정자 선택',
+        sub: a.selected
+          ? `내 예정자: ${pickName(c, a.selected)} (모두 고르기 전까지 바꿀 수 있어요) · 마피아가 모두 고르면 예정자 중에서 최종 선택을 합니다`
+          : '오늘 밤 대상 후보를 고르세요 · 10초 안에 고르지 않으면 예정자 없음으로 처리됩니다 · 모두 고르면 예정자 중에서 최종 선택을 합니다',
+        countdown: a.stepDeadline,
+      };
+    }
+    return {
+      title: '② 최종 선택',
+      sub:
+        (a.selected ? `내 최종 선택: ${pickName(c, a.selected)} (모두 고르기 전까지 바꿀 수 있어요)` : '예정자 중에서 오늘 밤 대상을 고르세요') +
+        ' · 가장 많이 고른 사람이 대상이 되고 동률이면 무작위 · 모두 "아무도 선택하지 않음"이면 아무 일도 없어요',
+    };
+  }
+
+  /** 동료 마피아가 지금 단계에서 누구를 골랐는지 */
+  function teamRow(c, a) {
+    const { el } = c;
+    const row = el('div', 'team-picks');
+    const picks = new Map(teamPicks(a).map((x) => [x.by, x.targetId]));
+    const label = a.step === 'final' ? '최종' : '예정자';
+    for (const id of a.members || []) {
+      const has = picks.has(id);
+      const t = picks.get(id);
+      const chip = el('span', 'tp ' + (!has ? 'wait' : t ? 'on' : 'none'));
+      chip.append(el('b', null, id === c.me.id ? '나' : c.nameOf(id)));
+      chip.append(document.createTextNode(!has ? ' · 고르는 중…' : t ? ` → ${c.nameOf(t)}` : ' → 아무도'));
+      chip.title = `${id === c.me.id ? '나' : c.nameOf(id)}의 ${label} 선택`;
+      row.append(chip);
+    }
+    return row;
+  }
+
   function render(root, c) {
     const { el, ui, play } = c;
     const me = play.me || { alive: false, action: null };
     const a = me.action;
     const accused = c.player(play.accusedId);
+    const teamKill = me.alive && play.stage === 'night' && isTeamKill(a);
 
     // 안내 배너
     let title = '';
     let sub = '';
     let tone = '';
+    let countdown = null;
     if (play.stage === 'end') {
       const win = play.winner === 'mafia';
       title = win ? '🔪 마피아 승리' : '⚖️ 시민 승리';
@@ -111,10 +177,14 @@
       title = '직업을 확인하세요';
       sub = '잠시 후 첫 번째 밤이 시작됩니다.';
     } else if (play.stage === 'night') {
-      if (a && a.type === 'night') {
+      if (teamKill) {
+        tone = 'alert';
+        ({ title, sub, countdown } = killBanner(c, a));
+      } else if (a && a.type === 'night') {
         title = a.locked ? '조사를 마쳤습니다' : a.prompt;
         if (a.locked) sub = '결과는 대화창에서 확인하세요.';
         else if (a.action === 'kill') {
+          // 이전 서버(1.2.1 이하)와 연결된 경우
           tone = 'alert';
           if (!a.selected) sub = '동료 마피아 중 마지막으로 고른 사람이 대상이 되고, 그 마피아가 움직인 것으로 처리됩니다.';
           else if (a.done === false)
@@ -149,19 +219,35 @@
       title = '판결이 내려졌습니다';
       sub = '곧 밤이 찾아옵니다.';
     }
-    ui.banner(root, title, sub, tone);
+    const bannerEl = ui.banner(root, title, sub, tone);
+    if (countdown) {
+      // 제목 옆에 남은 시간 (⏱ 8초) — core 의 타이머가 매 순간 갱신
+      const cd = el('span', 'step-timer');
+      cd.append('⏱ ', ui.countdown(countdown));
+      bannerEl.insertBefore(cd, bannerEl.querySelector('small'));
+    }
+    if (teamKill && a.team && a.step !== 'done') bannerEl.append(teamRow(c, a));
 
     // 플레이어 카드
     let targets = [];
     if (a && a.type === 'night' && !a.locked) targets = a.targets;
     if (a && a.type === 'vote') targets = a.targets;
+    // 마피아: 대상마다 동료가 고른 수 (예정자 / 최종), 최종 선택 단계에서는 예정자 표시
+    const killCount = {};
+    const candidates = new Set();
+    if (teamKill && a.team && a.step !== 'done') {
+      for (const x of teamPicks(a)) if (x.targetId) killCount[x.targetId] = (killCount[x.targetId] || 0) + 1;
+      if (a.step === 'final') for (const id of a.targets) candidates.add(id);
+    }
     const items = play.players.map((x) => {
       const r = x.role ? play.roles[x.role] : null;
+      let tag = r ? { text: `${r.icon} ${r.name}`, tone: r.team === 'mafia' ? 'bad' : '' } : null;
+      if (candidates.has(x.id)) tag = { text: tag ? `${tag.text} · 🎯 예정자` : '🎯 예정자', tone: 'bad' };
       return {
         id: x.id,
         dead: !x.alive,
-        tag: r ? { text: `${r.icon} ${r.name}`, tone: r.team === 'mafia' ? 'bad' : '' } : null,
-        badge: play.voteTally && play.voteTally[x.id],
+        tag,
+        badge: (play.voteTally && play.voteTally[x.id]) || (killCount[x.id] ? `🔪${killCount[x.id]}` : null),
       };
     });
     ui.playerGrid(root, items, {
@@ -173,7 +259,15 @@
 
     // 하단 버튼
     const buttons = [];
-    if (a && a.type === 'discussion') {
+    if (teamKill) {
+      if (a.canSkip) {
+        buttons.push({
+          label: a.selected === 'none' ? '✓ 아무도 선택하지 않음' : '🚫 아무도 선택하지 않음',
+          cls: a.selected === 'none' ? 'selected' : '',
+          onClick: () => c.act('night', { targetId: 'none' }),
+        });
+      }
+    } else if (a && a.type === 'discussion') {
       if (play.readyTotal != null) {
         const cnt = `${play.readyCount}/${play.readyTotal}`;
         buttons.push({

@@ -4,7 +4,7 @@
   'use strict';
 
   const PROTOCOL = 2; // server/core/version.js 의 PROTOCOL 과 같아야 함
-  const VERSION = '1.2.1';
+  const VERSION = '1.2.2';
   const BASE = window.PLAYNET_BASE || '/';
   const CFG = window.PLAYNET_CONFIG || {};
 
@@ -141,6 +141,14 @@
       });
       parent.append(grid);
       return grid;
+    },
+
+    /** 서버 시각 deadline 까지 남은 초 ("8초") — 화면 타이머와 함께 매 순간 갱신된다 */
+    countdown(deadline) {
+      const s = el('span', 'countdown');
+      s.dataset.countdown = String(deadline);
+      paintCountdown(s);
+      return s;
     },
 
     /** buttons: [{ label, cls, onClick, disabled }] */
@@ -700,7 +708,15 @@
   }
 
   // ───────────────── 타이머
+  function paintCountdown(node) {
+    const left = Math.max(0, Number(node.dataset.countdown) - (Date.now() + skew));
+    const sec = Math.ceil(left / 1000);
+    node.textContent = `${sec}초`;
+    node.classList.toggle('urgent', sec <= 3);
+  }
+
   function tick() {
+    document.querySelectorAll('[data-countdown]').forEach(paintCountdown);
     if (!state || !state.deadline) return;
     const left = Math.max(0, state.deadline - (Date.now() + skew));
     const sec = Math.ceil(left / 1000);
