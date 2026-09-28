@@ -7,6 +7,151 @@
   const roleOf = (c) => (c.play && c.play.me ? c.play.roles[c.play.me.role] : null);
   const pstate = (c, id) => (c.play ? c.play.players.find((x) => x.id === id) : null);
 
+  // ───────────────── 📢 사회자 목소리 (이 기기만)
+  //  서버가 모두에게 보이는 진행 알림("밤이 되었습니다…")에 붙여 보낸 읽기용 문장(speech)을 차례로 읽는다.
+  //  직업·조사 결과 같은 개인 알림에는 읽을 문장이 없어서 어떤 기기도 소리 내지 않는다.
+  //  기본은 켜짐 — 한자리에 모여 여러 기기로 할 때는 한 기기만 켜 두면 된다.
+  const HAS_TTS = 'speechSynthesis' in window && typeof window.SpeechSynthesisUtterance === 'function';
+  const NAR_KEY = 'playnet.mafia.narrator';
+  const NAR_VOICE = { rate: 0.95, pitch: 0.85 }; // 조금 낮고 차분하게
+  const N = { on: readPref(NAR_KEY), primed: false, queue: [], id: 0, busy: false, u: null };
+  function readPref(key) {
+    try {
+      return localStorage.getItem(key) !== '0';
+    } catch {
+      return true;
+    }
+  }
+  function savePref(key, on) {
+    try {
+      localStorage.setItem(key, on ? '1' : '0');
+    } catch {
+      /* 저장 안 돼도 이번 접속 동안은 유지 */
+    }
+  }
+  const inMafia = () => document.body.classList.contains('game-mafia');
+  function koVoice() {
+    try {
+      return window.speechSynthesis.getVoices().find((v) => /^ko/i.test(v.lang || '')) || null;
+    } catch {
+      return null;
+    }
+  }
+  /** 지금 바로 읽기 (하던 말은 끊는다) — 끝나면 줄 서 있던 다음 문장 */
+  function sayNow(text, done) {
+    const id = ++N.id;
+    N.busy = true;
+    let finished = false;
+    const fin = () => {
+      if (finished) return;
+      finished = true;
+      if (N.id !== id) return;
+      N.busy = false;
+      N.u = null;
+      if (done) done();
+      setTimeout(nextLine, 250);
+    };
+    if (window.PLAYNET_DEBUG) (window.PlayNet._narr = window.PlayNet._narr || []).push(text);
+    const go = () => {
+      if (N.id !== id) return;
+      try {
+        const u = new window.SpeechSynthesisUtterance(text);
+        u.lang = 'ko-KR';
+        u.rate = NAR_VOICE.rate;
+        u.pitch = NAR_VOICE.pitch;
+        u.volume = 1;
+        const v = koVoice();
+        if (v) u.voice = v;
+        u.onend = fin;
+        u.onerror = fin;
+        N.u = u; // 끝 알림이 사라지지 않게 붙잡아 둔다 (일부 브라우저)
+        window.speechSynthesis.speak(u);
+      } catch {
+        setTimeout(fin, 0);
+      }
+    };
+    let busy = false;
+    try {
+      busy = !!(window.speechSynthesis.speaking || window.speechSynthesis.pending);
+      if (busy) window.speechSynthesis.cancel();
+    } catch {
+      /* 무시 */
+    }
+    if (busy) setTimeout(go, 80); // 끊자마자 말하면 소리가 안 나는 브라우저가 있어 잠깐 쉬었다가
+    else go(); // 누른 순간이면 그 안에서 바로 (아이폰)
+    setTimeout(fin, 2000 + String(text).length * 280); // 끝났다는 알림이 오지 않는 브라우저 대비
+  }
+  function nextLine() {
+    while (N.queue.length && !N.busy) {
+      const it = N.queue.shift();
+      if (Date.now() - it.at > 20000 || !N.on || !inMafia()) continue; // 너무 늦은 알림은 건너뛴다
+      return void sayNow(it.text);
+    }
+  }
+  function narrate(text) {
+    if (!N.on || !HAS_TTS || !inMafia() || !text) return;
+    N.queue.push({ text, at: Date.now() });
+    if (N.queue.length > 6) N.queue.shift();
+    if (!N.busy) nextLine();
+  }
+  function hush() {
+    N.id++;
+    N.queue = [];
+    N.busy = false;
+    N.u = null;
+    try {
+      if (HAS_TTS) window.speechSynthesis.cancel();
+    } catch {
+      /* 무시 */
+    }
+  }
+  function setNarrator(on, c) {
+    N.on = on;
+    savePref(NAR_KEY, on);
+    if (!on) hush();
+    else sayNow('사회자 목소리를 켰습니다.'); // 누른 순간 한 번 읽어 두면 아이폰에서도 이후 알림을 읽는다
+    if (c) c.toast(on ? '📢 사회자 목소리 켜짐 — 이 기기에서 진행 알림을 읽어 줘요' : '🔇 사회자 목소리 꺼짐 (이 기기만)');
+  }
+  // 아이폰 등: 사용자 동작 안에서 한 번 말해 두어야 나중에 저절로 읽을 수 있다 (홈 화면에서 방에 들어가는 누름 포함)
+  function primeTts(e) {
+    if (N.primed || !N.on || !HAS_TTS) return;
+    if (!inMafia() && !document.body.classList.contains('screen-home')) return;
+    if (!['touchend', 'click', 'keydown'].includes(e.type)) return;
+    N.primed = true;
+    try {
+      const u = new window.SpeechSynthesisUtterance(' ');
+      u.volume = 0;
+      window.speechSynthesis.speak(u);
+    } catch {
+      /* 무시 */
+    }
+  }
+  for (const type of ['touchend', 'click', 'keydown']) document.addEventListener(type, primeTts, true);
+  // 마피아 방을 나가면 읽던 말을 멈춘다 (다른 게임·화면에 영향 없게)
+  let wasMafia = inMafia();
+  new MutationObserver(() => {
+    const now = inMafia();
+    if (now === wasMafia) return;
+    wasMafia = now;
+    if (!now) hush();
+  }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+  function narratorNote() {
+    if (!HAS_TTS) return '이 브라우저는 읽어 주기를 지원하지 않아요 (크롬·사파리·삼성 인터넷에서 가능).';
+    return '기본으로 켜져 있어요. "밤이 되었습니다", "아침이 밝았습니다"처럼 진행 알림을 사회자가 읽어 줘요. 직업·조사 결과 같은 비밀은 읽지 않아요. 한자리에 모여 여러 기기로 할 때는 한 기기만 켜 두면 돼요.';
+  }
+  function narratorPill(c) {
+    const { el } = c;
+    const b = el('button', 'qs-voice-pill' + (N.on ? ' on' : ''), N.on ? '📢 사회자 켜짐' : '🔇 사회자 꺼짐');
+    b.type = 'button';
+    b.title = narratorNote();
+    b.onclick = () => {
+      setNarrator(!N.on, c);
+      b.replaceWith(narratorPill(c));
+    };
+    return b;
+  }
+
   function renderSettings(panel, c) {
     const { el, isHost, info } = c;
     const s = c.state.settings;
@@ -87,6 +232,33 @@
     sw2.append(cb2, el('span', null, '죽은 사람의 직업 공개'));
     sec3.append(sw2);
     panel.append(sec3);
+
+    // 이 기기만 (방장이 아니어도 각자)
+    const sec4 = el('div', 'set-section');
+    sec4.append(el('div', 'set-title', '내 기기'));
+    if (HAS_TTS) {
+      const sw4 = el('label', 'switch');
+      const cb4 = el('input');
+      cb4.type = 'checkbox';
+      cb4.checked = N.on;
+      cb4.onchange = () => setNarrator(cb4.checked, c);
+      sw4.append(cb4, el('span', null, '📢 사회자 목소리 — 진행 알림을 읽어 주기'));
+      sec4.append(sw4);
+    }
+    sec4.append(el('p', 'set-note', narratorNote()));
+    if (HAS_TTS) {
+      const btns = el('div', 'qs-dev-btns');
+      const test = el('button', 'btn small', '🔊 소리 확인');
+      test.type = 'button';
+      test.title = '이 기기에서 사회자 목소리가 들리는지 확인해요';
+      test.onclick = () => {
+        N.queue = [];
+        sayNow('사회자입니다. 목소리가 잘 들리나요?');
+      };
+      btns.append(test);
+      sec4.append(btns);
+    }
+    panel.append(sec4);
   }
 
   /**
@@ -219,6 +391,11 @@
       title = '판결이 내려졌습니다';
       sub = '곧 밤이 찾아옵니다.';
     }
+    if (HAS_TTS) {
+      const tools = el('div', 'mf-tools');
+      tools.append(narratorPill(c));
+      root.append(tools);
+    }
     const bannerEl = ui.banner(root, title, sub, tone);
     if (countdown) {
       // 제목 옆에 남은 시간 (⏱ 8초) — core 의 타이머가 매 순간 갱신
@@ -339,6 +516,10 @@
     render,
     showCard,
     onStage,
+    /** 새 대화 — 모두에게 보이는 진행 알림에 읽을 문장이 있으면 사회자 목소리로 */
+    onChat(c, m) {
+      if (m.channel === 'system' && !m.to && m.speech) narrate(m.speech);
+    },
     topbar(c) {
       const play = c.play;
       const alive = play.players.filter((x) => x.alive).length;

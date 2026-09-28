@@ -3,8 +3,8 @@
 (() => {
   'use strict';
 
-  const PROTOCOL = 2; // server/core/version.js 의 PROTOCOL 과 같아야 함
-  const VERSION = '1.3.4';
+  const PROTOCOL = 3; // server/core/version.js 의 PROTOCOL 과 같아야 함
+  const VERSION = '1.4.0';
   const BASE = window.PLAYNET_BASE || '/';
   const CFG = window.PLAYNET_CONFIG || {};
 

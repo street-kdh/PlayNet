@@ -67,6 +67,19 @@
       /* 저장 안 돼도 이번 접속 동안은 유지 */
     }
   }
+  // 코너 화면 (quiz-corners.js 가 window.PlayNetQuiz.corners 에 등록)
+  const C_UI = { active: null };
+  const corners = () => (window.PlayNetQuiz && window.PlayNetQuiz.corners) || {};
+  function leaveCorners() {
+    C_UI.active = null;
+    for (const ui of Object.values(corners())) {
+      try {
+        if (ui.leave) ui.leave();
+      } catch {
+        /* 무시 */
+      }
+    }
+  }
   const debug = (key, v) => {
     if (window.PLAYNET_DEBUG) (window.PlayNet['_' + key] = window.PlayNet['_' + key] || []).push(v);
   };
@@ -140,7 +153,34 @@
     pass: () => (tone(784, 0, 0.6, 'sine', 0.7, BELL), tone(659, 0.22, 0.6, 'sine', 0.7, BELL), tone(1047, 0.46, 1.2, 'sine', 0.8, BELL)), // 딩동댕
     wrong: () => (tone(415, 0, 0.17, 'square', 0.55), tone(415, 0.22, 0.24, 'square', 0.55)), // 삐빅
     fail: () => (tone(523, 0, 1.5, 'sine', 0.75, [[2.0, 0.55], [2.76, 0.45], [5.4, 0.25], [8.93, 0.12]]), tone(262, 0, 0.4, 'triangle', 0.55)), // 땡~ (종)
+    tick: () => tone(1568, 0, 0.035, 'square', 0.22), // 째깍
+    tock: () => tone(1175, 0, 0.035, 'square', 0.2),
+    boom: () => (noise(0.9, 0.9), tone(180, 0, 0.5, 'triangle', 0.6), tone(90, 0.02, 0.7, 'sine', 0.5)), // 펑!
+    flag: () => tone(988, 0, 0.06, 'triangle', 0.35), // 깃발 탁
   };
+  /** 잡음 한 번 (폭발) — 높은 소리부터 빨리 줄어들게 */
+  function noise(dur, vol) {
+    const ctx = audio();
+    const out = output();
+    if (!ctx || !out) return;
+    const len = Math.max(1, Math.floor(ctx.sampleRate * dur));
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.2);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    const t0 = ctx.currentTime;
+    lp.frequency.setValueAtTime(5000, t0);
+    lp.frequency.exponentialRampToValueAtTime(300, t0 + dur);
+    const g = ctx.createGain();
+    g.gain.value = vol;
+    src.connect(lp);
+    lp.connect(g);
+    g.connect(out);
+    src.start(t0);
+  }
   function sfx(name) {
     if (!V.on) return;
     debug('sfx', name);
@@ -232,7 +272,9 @@
   //  새 문제 멘트는 하던 말을 끊고 바로, 나머지는 줄을 서되 오래된 것은 버리고, 가벼운 말(놀리기 등)은 바쁘면 건너뛴다.
   //  사자성어 릴레이에서 누군가 말로 답하는 동안, 그리고 내 차례(읽기·듣기) 중에는 조용히 — 마이크에 섞이지 않게.
   const HOST_MINOR = /^(extras|extrasNoDouble|streak3|streak5|leadChange|close|wrongFunny|spoiler)$/;
-  const RELAY_END = /^(turnFail|turnPass|turnLeft|turnSkip|turnCorrect|stealCorrect|stealFail|timeout|allPass)$/;
+  const RELAY_END = /^(turnFail|turnPass|turnLeft|turnSkip|turnCorrect|stealCorrect|stealFail|timeout|allPass|bomb_boom|twister_score|twister_timeout|taboo_end)$/;
+  // 누군가 말로 답하기 시작할 때 나오는 멘트 — 어떤 기기도 읽지 않는다
+  const QUIET_KEYS = /^(q_idiom|twister_turn|taboo_hit|taboo_buzz)$/;
   const JAMO_NAMES = {
     ㄱ: '기역', ㄲ: '쌍기역', ㄴ: '니은', ㄷ: '디귿', ㄸ: '쌍디귿', ㄹ: '리을', ㅁ: '미음', ㅂ: '비읍', ㅃ: '쌍비읍', ㅅ: '시옷',
     ㅆ: '쌍시옷', ㅇ: '이응', ㅈ: '지읒', ㅉ: '쌍지읒', ㅊ: '치읓', ㅋ: '키읔', ㅌ: '티읕', ㅍ: '피읖', ㅎ: '히읗',
@@ -259,9 +301,10 @@
   }
   function relayQuiet(m) {
     const key = (m && m.key) || '';
-    if (key === 'q_idiom' || (!key && m && /○○」/.test(m.text || ''))) return true; // 릴레이 차례 알림 — 답하는 사람 기기가 직접 읽는다
+    if (QUIET_KEYS.test(key) || (!key && m && /○○」/.test(m.text || ''))) return true; // 릴레이 차례 알림 등 — 답하는 사람 기기가 직접 읽는다
     if (RELAY_END.test(key)) return false; // 차례가 끝났다는 멘트는 읽는다 (화면이 바뀌기 전에 올 수 있어서)
     const play = V.c && V.c.play;
+    if (play && play.stage === 'corner') return !!(play.corner && play.corner.quiet); // 코너: 누군가 말하는 중
     return !!(play && play.round && play.round.mode === 'turn' && play.stage === 'question');
   }
   const myVoiceBusy = () => T.kind === 'prompt' || !!V.rec || ['reading', 'listening', 'checking'].includes(V.mode);
@@ -368,6 +411,7 @@
     wasAt = now;
     if (now === 'quiz') return void idleSession();
     if (left) {
+      leaveCorners();
       stopListening();
       hush();
     }
@@ -420,7 +464,18 @@
     idleSession();
   }
   /** 한 마디 듣기 — 말이 끝나면 onFinal(후보들), 아무 말도 없으면 onNothing(), 듣기를 시작하지 못하면 onFail() */
-  function listen(onFinal, onNothing, onFail) {
+  /**
+   * opts (코너용): continuous — 계속 듣기(말이 끝날 때마다 onPhrase(후보들)), onInterim(말하는 중인 글),
+   *   onSpeechStart() — 말을 시작한 순간(잰말놀이 시간 재기), onBlocked(오류) — 마이크를 쓸 수 없을 때
+   */
+  /** 듣기를 할 수 없는 이유 (오류 이름 → 안내) */
+  function blockedNote(err) {
+    if (err === 'audio-capture') return '마이크를 찾을 수 없어요 — 입력칸으로 해 주세요.';
+    if (err === 'network') return '음성 인식 서버에 연결할 수 없어요 — 입력칸으로 해 주세요.';
+    if (err === 'language-not-supported') return '이 브라우저는 한국어 음성 인식을 지원하지 않아요 — 입력칸으로 해 주세요.';
+    return '마이크 권한이 필요해요 — 주소창의 🔒에서 허용하거나 입력칸으로 해 주세요.';
+  }
+  function listen(onFinal, onNothing, onFail, opts = {}) {
     if (!SR) return void onFail();
     stopListening();
     let rec;
@@ -432,23 +487,36 @@
     rec.lang = 'ko-KR';
     rec.interimResults = true;
     rec.maxAlternatives = 5;
-    rec.continuous = false;
+    rec.continuous = !!opts.continuous;
     let final = null;
     let blocked = null;
+    let started = false;
+    const speechStart = () => {
+      if (started) return;
+      started = true;
+      if (opts.onSpeechStart) opts.onSpeechStart();
+    };
+    rec.onspeechstart = speechStart;
     rec.onresult = (e) => {
+      speechStart();
       for (let i = e.resultIndex || 0; i < e.results.length; i++) {
         const r = e.results[i];
         const alts = [];
         for (let j = 0; j < r.length; j++) if (r[j] && r[j].transcript) alts.push(String(r[j].transcript).trim());
-        if (r.isFinal) final = alts.filter(Boolean);
-        else if (alts[0]) {
+        if (r.isFinal) {
+          if (opts.onPhrase) {
+            if (alts.filter(Boolean).length) opts.onPhrase(alts.filter(Boolean));
+          } else final = alts.filter(Boolean);
+        } else if (alts[0]) {
           V.heard = alts[0];
-          paint();
+          if (opts.onInterim) opts.onInterim(alts[0]);
+          else paint();
         }
       }
     };
     rec.onerror = (e) => {
-      if (e && ['not-allowed', 'service-not-allowed', 'audio-capture'].includes(e.error)) blocked = e.error;
+      // 다시 들어도 소용없는 오류 — 권한·마이크 없음·인식 서버 연결 안 됨·한국어 미지원
+      if (e && ['not-allowed', 'service-not-allowed', 'audio-capture', 'network', 'language-not-supported'].includes(e.error)) blocked = e.error;
     };
     rec.onend = () => {
       if (V.rec !== rec) return;
@@ -456,8 +524,9 @@
       idleSession();
       if (final && final.length) onFinal(final);
       else if (blocked) {
+        if (opts.onBlocked) return void opts.onBlocked(blocked);
         V.mode = 'tap';
-        V.note = blocked === 'audio-capture' ? '마이크를 찾을 수 없어요.' : '마이크 권한이 필요해요 — 버튼을 눌러 말해 보세요.';
+        V.note = blockedNote(blocked);
         paint();
       } else if (onNothing) onNothing();
     };
@@ -584,8 +653,21 @@
   function voiceTick(c) {
     V.c = c;
     const play = c.play;
+    if (window.PLAYNET_DEBUG) window.PlayNet._play = play; // 화면 테스트용
     // 릴레이에서 누군가 답하기 시작하면 읽던 사회자 멘트를 멈춘다 (한자리에 모여 있으면 답하는 사람의 마이크에 섞이므로)
     if (T.kind === 'host' && relayQuiet(null)) hush();
+    if (play && play.stage === 'corner' && play.corner) {
+      if (C_UI.active && C_UI.active !== play.corner.kind) leaveCorners();
+      C_UI.active = play.corner.kind;
+      const ui = corners()[play.corner.kind];
+      if (ui && ui.tick) ui.tick(c, play.corner);
+      else stopListening();
+      return;
+    }
+    if (C_UI.active) {
+      leaveCorners();
+      stopListening();
+    }
     if (!V.on || !play) return;
     const key = qKey(play);
     if (myTurn(play) && V.turnKey !== key) startTurn(play);
@@ -765,6 +847,11 @@
   /** 새 대화 — 입력칸으로 보낸 내 답이 틀렸으면 삐빅 */
   function onChat(c, m) {
     if (m.kind === 'host') return void hostSay(m);
+    const play = c.play;
+    if (play && play.stage === 'corner' && play.corner) {
+      const cu = corners()[play.corner.kind];
+      if (cu && cu.onChat) cu.onChat(c, m, play.corner);
+    }
     if (!V.on || !V.typed || m.from !== c.me.id || m.voice) return;
     const t = V.typed;
     if (Date.now() - t.at > 4000) {
@@ -783,7 +870,7 @@
     if (!info) return;
 
     const sec1 = el('div', 'set-section');
-    sec1.append(el('div', 'set-title', '라운드 구성'));
+    sec1.append(el('div', 'set-title', '라운드 구성 — 퀴즈와 코너를 골라 한 회를 꾸며요'));
     const list = el('div', 'qs-round-opts');
     const on = new Set(s.rounds);
     for (const r of info.rounds) {
@@ -805,7 +892,7 @@
       };
       const txt = el('span', 'qro-text');
       txt.append(el('b', null, `${r.icon} ${r.name}`), el('small', null, r.desc));
-      row.append(cb, txt, el('span', 'qro-mode ' + r.mode, MODE_LABEL[r.mode]));
+      row.append(cb, txt, el('span', 'qro-mode ' + r.mode, r.tag || MODE_LABEL[r.mode]));
       list.append(row);
     }
     sec1.append(list);
@@ -820,7 +907,7 @@
     row2.append(el('span', null, '문제당 시간'));
     row2.append(seg(el, [[15, '15초'], [20, '20초'], [30, '30초']], s.seconds, !isHost, (v) => c.update({ seconds: v })));
     sec2.append(row2);
-    sec2.append(el('p', 'set-note', '사자성어 릴레이는 사람마다 한 문제씩(시간은 조금 짧게), 못 맞히면 다른 사람이 가로챌 수 있어요.'));
+    sec2.append(el('p', 'set-note', '사자성어 릴레이는 사람마다 한 문제씩(시간은 조금 짧게), 못 맞히면 다른 사람이 가로챌 수 있어요. 코너(폭탄·청기백기 등)는 문제 수에 맞춰 길이가 바뀌어요.'));
     panel.append(sec2);
 
     const sec3 = el('div', 'set-section');
@@ -911,10 +998,19 @@
     else if (r) {
       s.append(el('span', 'qs-rnd', `ROUND ${play.roundIndex + 1}/${total}`), el('span', 'qs-rname', `${r.icon} ${r.name}`));
       if (play.qTotal && ['question', 'steal', 'reveal'].includes(play.stage)) s.append(el('span', 'qs-qn', `문제 ${play.qIndex}/${play.qTotal}`));
+      const cp = cornerProgress(play);
+      if (cp) s.append(el('span', 'qs-qn', cp));
       if (r.double) s.append(el('span', 'qs-double', '⭐×2'));
     } else s.append(el('span', 'qs-rnd', `총 ${total}라운드`));
     s.append(voicePill(c));
     return s;
+  }
+
+  /** 코너 진행 ("폭탄 2/3" 등) */
+  function cornerProgress(play) {
+    const cv = play.stage === 'corner' && play.corner;
+    const ui = cv && corners()[cv.kind];
+    return ui && ui.progress ? ui.progress(cv) : '';
   }
 
   function tiles(c, list, big) {
@@ -986,6 +1082,10 @@
       if (play.turnId === r.id && ['question', 'steal'].includes(play.stage)) tags.append(el('span', 'qs-tag turn', play.stage === 'steal' ? '쉬는 중' : '차례'));
       if (live && passed.has(r.id)) tags.append(el('span', 'qs-tag pass', '패스'));
       if (live && r.streak >= 2) tags.append(el('span', 'qs-tag fire', `🔥${r.streak}`));
+      if (play.stage === 'corner' && play.corner) {
+        const cu = corners()[play.corner.kind];
+        if (cu && cu.tags) for (const t of cu.tags(c, play.corner, r.id) || []) tags.append(el('span', 'qs-tag' + (t.cls ? ' ' + t.cls : ''), t.text));
+      }
       if (p.left) tags.append(el('span', 'qs-tag', '나감'));
       li.append(tags);
       const st = el('span', 'qs-stars');
@@ -1057,14 +1157,14 @@
         if (play.doubleLast && i === play.rounds.length - 1 && play.rounds.length > 1) li.append(el('span', 'qs-double', '⭐×2'));
         ol.append(li);
       });
-      box.append(ol, el('p', 'qs-lineup-note', '정답은 채팅으로! 가장 먼저 맞히면 별 ⭐ · 꼴찌는 벌칙 😆'));
+      box.append(ol, el('p', 'qs-lineup-note', '퀴즈·코너마다 별 ⭐을 모아요 · 꼴찌는 벌칙 😆'));
       root.append(box);
     } else if (play.stage === 'roundIntro' && play.round) {
       const r = play.round;
       const card = el('div', 'qs-round-card');
       card.append(el('div', 'qs-rc-icon', r.icon), el('div', 'qs-rc-n', `ROUND ${play.roundIndex + 1}`), el('div', 'qs-rc-name', r.name), el('div', 'qs-rc-desc', r.desc));
       const meta = el('div', 'qs-rc-meta');
-      meta.append(el('span', 'qro-mode ' + r.mode, MODE_LABEL[r.mode]), el('span', null, r.points > 1 ? '정답마다 별 2개 ⭐⭐' : '정답마다 별 1개 ⭐'));
+      meta.append(el('span', 'qro-mode ' + r.mode, r.tag || MODE_LABEL[r.mode]), el('span', null, `${r.scoring || '정답마다 별'}${r.points > 1 ? ' · 별 2배 ⭐⭐' : ''}`));
       card.append(meta);
       if (play.turnOrder) card.append(el('div', 'qs-rc-order', `순서: ${play.turnOrder.map((id) => c.nameOf(id)).join(' → ')}`));
       root.append(card);
@@ -1110,6 +1210,10 @@
       card.append(el('div', 'qs-winner', who));
       if (r.note) card.append(el('div', 'qs-note', r.note));
       root.append(card);
+    } else if (play.stage === 'corner' && play.corner) {
+      const cu = corners()[play.corner.kind];
+      if (cu) cu.render(root, c, play.corner);
+      else ui.banner(root, play.round ? play.round.name : '코너', '화면을 새로고침해 주세요 (새 버전).', 'accent');
     } else if (play.stage === 'roundEnd') {
       ui.banner(root, `${play.roundIndex + 1}라운드 끝!`, '이번 라운드에서 모은 별은 +로 표시돼요. 잠시 후 다음 라운드!', 'accent');
     } else if (play.stage === 'finale') {
@@ -1168,12 +1272,32 @@
     }
   }
 
+  // 코너 화면(quiz-corners.js)이 쓰는 음성·소리 도구
+  window.PlayNetQuiz = Object.assign(window.PlayNetQuiz || {}, {
+    V,
+    SR,
+    HAS_TTS,
+    sfx,
+    speak,
+    utter,
+    hush,
+    listen,
+    blockedNote,
+    stopListening,
+    unlock,
+    myVoiceBusy,
+    debug,
+    promptBlock,
+    tiles,
+    corners: (window.PlayNetQuiz && window.PlayNetQuiz.corners) || {},
+  });
+
   window.PlayNet.registerGame('quiz', {
     meta: {
       name: '예능 퀴즈쇼',
       icon: '🎤',
-      tagline: 'AI 사회자가 진행하는 한 회짜리 예능 퀴즈!',
-      description: '초성·인물·노래 제목 퀴즈, 사자성어 릴레이, 속담 이어 말하기, 넌센스까지. 채팅에 먼저 맞히면 별 ⭐, 꼴찌는 벌칙!',
+      tagline: 'AI 사회자가 진행하는 한 회짜리 예능!',
+      description: '초성·인물 퀴즈부터 폭탄 돌리기·청기백기·이구동성·생존 퀴즈까지. 코너마다 별 ⭐을 모으고, 꼴찌는 벌칙!',
       players: '2~12명',
       playtime: '10~20분',
     },
@@ -1186,7 +1310,10 @@
       const r = play.round;
       let sub = `${play.rounds.length}라운드`;
       if (play.stage === 'finale' || play.stage === 'end') sub = `${play.rounds.length}라운드 완료`;
-      else if (r) sub = `${play.roundIndex + 1}/${play.rounds.length}라운드 · ${r.name}${play.qTotal && ['question', 'steal', 'reveal'].includes(play.stage) ? ` · ${play.qIndex}/${play.qTotal}` : ''}`;
+      else if (r) {
+        const cp = cornerProgress(play);
+        sub = `${play.roundIndex + 1}/${play.rounds.length}라운드 · ${r.name}${play.qTotal && ['question', 'steal', 'reveal'].includes(play.stage) ? ` · ${play.qIndex}/${play.qTotal}` : ''}${cp ? ` · ${cp}` : ''}`;
+      }
       return { icon: STAGE_ICON[play.stage] || '🎤', label: play.stageLabel, sub };
     },
     roleChip(c) {
